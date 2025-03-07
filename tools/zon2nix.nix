@@ -1,12 +1,11 @@
 {
-  zon2json-lock
-  , writeShellApplication
-  , jq
+  zon2json-lock,
+  writeShellApplication,
+  jq,
 }:
-
 writeShellApplication {
   name = "zon2nix";
-  runtimeInputs = [ zon2json-lock jq ];
+  runtimeInputs = [zon2json-lock jq];
   text = ''
     path="''${1:-build.zig.zon}"
 
@@ -33,7 +32,7 @@ writeShellApplication {
       fetchurl,
       fetchgit,
       runCommandLocal,
-      zig,
+      zig_0_13,
       name ? "zig-packages",
     }:
 
@@ -45,7 +44,7 @@ writeShellApplication {
         { name, artifact }:
         runCommandLocal name
           {
-            nativeBuildInputs = [ zig ];
+            nativeBuildInputs = [ zig_0_13 ];
           }
           ${"''"}
             hash="$(zig fetch --global-cache-dir "$TMPDIR" ''${artifact})"
@@ -135,5 +134,5 @@ writeShellApplication {
     EOF
     done < <(jq -r 'to_entries | .[] | .key, .value.name, .value.url, .value.hash' "$path")
     printf ']\n'
-    '';
+  '';
 }
