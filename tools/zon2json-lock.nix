@@ -1,16 +1,24 @@
 {
-  zon2json,
-  writeShellApplication,
-  jq,
-  zig_hook,
-  curl,
   coreutils,
+  curl,
   findutils,
+  jq,
   nix-prefetch-git,
+  writeShellApplication,
+  zig_hook,
+  zon2json,
 }:
 writeShellApplication {
   name = "zon2json-lock";
-  runtimeInputs = [zon2json jq zig_hook curl findutils coreutils nix-prefetch-git];
+  runtimeInputs = [
+    coreutils
+    curl
+    findutils
+    jq
+    nix-prefetch-git
+    zig_hook
+    zon2json
+  ];
   text = ''
     # shellcheck disable=SC2059
     error() { printf -- "error: $1\n" "''${@:2}" 1>&2; exit 1; }

@@ -32,7 +32,7 @@ writeShellApplication {
       fetchurl,
       fetchgit,
       runCommandLocal,
-      zig_0_13,
+      zig_0_14,
       name ? "zig-packages",
     }:
 
@@ -44,7 +44,7 @@ writeShellApplication {
         { name, artifact }:
         runCommandLocal name
           {
-            nativeBuildInputs = [ zig_0_13 ];
+            nativeBuildInputs = [ zig_0_14 ];
           }
           ${"''"}
             hash="$(zig fetch --global-cache-dir "$TMPDIR" ''${artifact})"

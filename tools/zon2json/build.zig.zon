@@ -1,6 +1,7 @@
 .{
-    .name = "zon2json",
-    .version = "0.0.0",
+    .name = .zon2json,
+    .version = "0.1.0",
+    .fingerprint = 0x861011a87843d6b4,
     .dependencies = .{},
     .paths = .{
         "src",

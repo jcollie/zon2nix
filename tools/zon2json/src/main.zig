@@ -1,5 +1,5 @@
 const std = @import("std");
-const zon2json = @import("zon2json.zig");
+const zon2json = @import("zon2json");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -18,7 +18,10 @@ pub fn main() !void {
     defer json.deinit();
 
     const fname = path orelse "build.zig.zon";
-    var file = try std.fs.cwd().openFile(fname, .{.mode = .read_only});
+    var file = try std.fs.cwd().openFile(
+        fname,
+        .{ .mode = .read_only },
+    );
     defer file.close();
 
     try zon2json.parse(
@@ -26,9 +29,7 @@ pub fn main() !void {
         file.reader().any(),
         json.writer(),
         std.io.getStdErr().writer(),
-        .{
-            .file_name = fname
-        }
+        .{ .file_name = fname },
     );
 
     try std.io.getStdOut().writer().writeAll(json.items);
