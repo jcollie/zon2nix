@@ -162,7 +162,7 @@ pub fn main() !void {
         nix_hashes.deinit(alloc);
     }
 
-    //
+    // loop through all the paths
     while (paths.pop()) |path| {
         defer alloc.free(path);
 
@@ -170,13 +170,13 @@ pub fn main() !void {
         if (paths_seen.contains(path)) continue;
         try paths_seen.put(alloc, try alloc.dupe(u8, path), true);
 
-        log.info("reading {s}", .{path});
+        log.debug("reading {s}", .{path});
         var file = std.fs.cwd().openFile(
             path,
             .{ .mode = .read_only },
         ) catch |err| switch (err) {
             error.FileNotFound => {
-                log.warn("{s} not found", .{path});
+                log.debug("{s} not found", .{path});
                 continue;
             },
             else => |e| return e,
@@ -222,17 +222,20 @@ pub fn main() !void {
                 );
                 errdefer alloc.free(new_path);
 
-                const nix_hash = try zon2nix.nix.fetch(alloc, url, .{ .nix_prefetch_git = options.nix_prefetch_git });
-                defer alloc.free(nix_hash);
-
-                try nix_hashes.put(alloc, try alloc.dupe(u8, zig_hash), try alloc.dupe(u8, nix_hash));
-
-                // log.info("nix hash: {s}", .{nix_hash});
                 log.debug("adding to paths: {s}", .{new_path});
                 try paths.append(
                     alloc,
                     new_path,
                 );
+
+                // if we're not outputting a nix derivation, skip fetching the hash
+                if (nix_out) |_| {
+                    const nix_hash = try zon2nix.nix.fetch(alloc, url, .{ .nix_prefetch_git = options.nix_prefetch_git });
+                    defer alloc.free(nix_hash);
+                    log.debug("nix hash for {s} is {s}", .{ zig_hash, nix_hash });
+
+                    try nix_hashes.put(alloc, try alloc.dupe(u8, zig_hash), try alloc.dupe(u8, nix_hash));
+                }
             }
 
             if (dep.path) |dep_path| {
@@ -270,6 +273,7 @@ pub fn main() !void {
     }
 
     if (txt_out) |path| {
+        // output a list of URLs
         var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer file.close();
         const writer = file.writer();
@@ -283,6 +287,7 @@ pub fn main() !void {
     }
 
     if (nix_out) |path| {
+        // output a Nix derivation
         var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer file.close();
         const writer = file.writer();

@@ -15,6 +15,8 @@ pub fn deinit(alloc: std.mem.Allocator) void {
 }
 
 pub fn getGlobalCacheDir(alloc: std.mem.Allocator, options: Options) ![]const u8 {
+    if (global_cache_dir) |cache_dir| return cache_dir;
+
     var stdout: std.ArrayListUnmanaged(u8) = .empty;
     defer stdout.deinit(alloc);
 
@@ -55,21 +57,19 @@ pub fn getGlobalCacheDir(alloc: std.mem.Allocator, options: Options) ![]const u8
     );
     defer parsed.deinit();
 
-    return try alloc.dupe(
+    const cache_dir = try alloc.dupe(
         u8,
         parsed.value.global_cache_dir orelse return error.GettingZigEnv,
     );
+    errdefer alloc.free(cache_dir);
+
+    global_cache_dir = cache_dir;
+
+    return cache_dir;
 }
 
 pub fn fetch(alloc: std.mem.Allocator, url: []const u8, expected_hash: []const u8, options: Options) ![]const u8 {
-    const cache_dir = cache: {
-        if (global_cache_dir) |dir| break :cache dir;
-
-        const dir = try getGlobalCacheDir(alloc, options);
-        global_cache_dir = dir;
-        break :cache dir;
-    };
-
+    const cache_dir = try getGlobalCacheDir(alloc, options);
     const cache_path = try std.fs.path.join(alloc, &.{ cache_dir, "p", expected_hash });
     errdefer alloc.free(cache_path);
 
@@ -85,7 +85,7 @@ pub fn fetch(alloc: std.mem.Allocator, url: []const u8, expected_hash: []const u
     defer stdout.deinit(alloc);
 
     zig_fetch: {
-        log.debug("zig fetch {s}", .{url});
+        log.info("zig fetch {s}", .{url});
         var stderr: std.ArrayListUnmanaged(u8) = .empty;
         defer stderr.deinit(alloc);
 
