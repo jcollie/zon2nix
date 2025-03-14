@@ -19,7 +19,7 @@ in
       ];
       zigBuildFlags = [
         "-Dzig=${lib.getExe zig_0_14}"
-        "-Dnix-prefetch-git=${lib.getExe nix-prefetch-git}"
+        "-Dnix-prefetch-git=${nix-prefetch-git}/bin/nix-prefetch-git"
       ];
       meta = {
         mainProgram = "zon2nix";
