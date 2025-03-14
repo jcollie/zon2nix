@@ -50,7 +50,7 @@ let
         if builtins.match "^[a-fA-F0-9]{40}$" rev_base != null then
           rev_base
         else
-          "refs/heads/''${rev_base}";
+          "refs/heads/${rev_base}";
     in
     fetchgit {
       inherit name rev hash;
@@ -71,19 +71,19 @@ let
       fetcher = {
         "git+http" = fetchGitZig {
           inherit name hash;
-          url = "http://''${path}";
+          url = "http://${path}";
         };
         "git+https" = fetchGitZig {
           inherit name hash;
-          url = "https://''${path}";
+          url = "https://${path}";
         };
         http = fetchZig {
           inherit name hash;
-          url = "http://''${path}";
+          url = "http://${path}";
         };
         https = fetchZig {
           inherit name hash;
-          url = "https://''${path}";
+          url = "https://${path}";
         };
       };
     in
