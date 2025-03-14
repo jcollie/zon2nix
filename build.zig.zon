@@ -1,7 +1,7 @@
 .{
-    .name = .zon2json,
-    .version = "0.1.0",
-    .fingerprint = 0x861011a87843d6b4,
+    .name = .zon2nix,
+    .version = "0.2.0",
+    .fingerprint = 0xf85edb58f3e511f2,
     .dependencies = .{},
     .paths = .{
         "src",

@@ -4,20 +4,28 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const mod = b.addModule("zon2json", .{
-        .root_source_file = b.path("src/zon2json.zig"),
+    const zig = b.option([]const u8, "zig", "Path to zig") orelse "zig";
+    const nix_prefetch_git = b.option([]const u8, "nix-prefetch-git", "Path to nix-prefetch-git") orelse "nix-prefetch-git";
+
+    const options = b.addOptions();
+    options.addOption([]const u8, "zig", zig);
+    options.addOption([]const u8, "nix_prefetch_git", nix_prefetch_git);
+
+    const mod = b.addModule("zon2nix", .{
+        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     const exe = b.addExecutable(.{
-        .name = "zon2json",
+        .name = "zon2nix",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .single_threaded = true,
     });
-    exe.root_module.addImport("zon2json", mod);
+    exe.root_module.addImport("zon2nix", mod);
+    exe.root_module.addOptions("options", options);
 
     b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);
@@ -27,7 +35,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     const unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/zon2json.zig"),
+        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .single_threaded = true,
