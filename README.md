@@ -1,6 +1,6 @@
-# zon2nix flake
+# zon2nix
 
-Flake for converting Zig build.zig.zon to nix derivations.
+For converting Zig build.zig.zon to nix derivations.
 
 https://ziglang.org/
 https://nixos.org/
