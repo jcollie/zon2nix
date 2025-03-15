@@ -64,6 +64,9 @@ pub fn main() !void {
     var nix_out: ?[]const u8 = null;
     defer if (nix_out) |f| alloc.free(f);
 
+    var json_out: ?[]const u8 = null;
+    defer if (json_out) |f| alloc.free(f);
+
     {
         var it = try std.process.ArgIterator.initWithAllocator(alloc);
         defer it.deinit();
@@ -78,6 +81,10 @@ pub fn main() !void {
             }
             if (std.mem.eql(u8, arg, "--quiet")) {
                 verbose -|= 1;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--debug")) {
+                verbose = 4;
                 continue;
             }
             if (std.mem.eql(u8, arg, "--txt")) {
@@ -96,6 +103,15 @@ pub fn main() !void {
             if (std.mem.eql(u8, arg[0..6], "--nix=")) {
                 if (arg.len == 6) return error.MissingPath;
                 nix_out = try alloc.dupe(u8, arg[6..]);
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--json")) {
+                json_out = try alloc.dupe(u8, it.next() orelse return error.MissingPath);
+                continue;
+            }
+            if (std.mem.eql(u8, arg[0..7], "--json=")) {
+                if (arg.len == 7) return error.MissingPath;
+                json_out = try alloc.dupe(u8, arg[7..]);
                 continue;
             }
             try paths.append(alloc, try alloc.dupe(u8, arg));
@@ -228,8 +244,8 @@ pub fn main() !void {
                     new_path,
                 );
 
-                // if we're not outputting a nix derivation, skip fetching the hash
-                if (nix_out) |_| {
+                // if we're not outputting a nix derivation or json, skip fetching the hash
+                if (nix_out != null or json_out != null) {
                     const nix_hash = try zon2nix.nix.fetch(alloc, url, .{ .nix_prefetch_git = options.nix_prefetch_git });
                     defer alloc.free(nix_hash);
                     log.debug("nix hash for {s} is {s}", .{ zig_hash, nix_hash });
@@ -321,6 +337,44 @@ pub fn main() !void {
 
         try writer.writeAll("]\n");
     }
+
+    if (json_out) |path| {
+        // output a json object
+        var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+        defer file.close();
+        const writer = file.writer();
+
+        std.mem.sort([]const u8, list.items, &names, sortByMap);
+
+        try writer.writeAll("{\n");
+
+        for (list.items, 0..) |zig_hash, index| {
+            const name = names.get(zig_hash) orelse return error.MissingName;
+            const url = urls.get(zig_hash) orelse return error.MissingUrl;
+            const nix_hash = nix_hashes.get(zig_hash) orelse return error.MissingNixHash;
+
+            try writer.print(
+                \\  "{[zig_hash]s}": {{
+                \\    "name": "{[name]s}",
+                \\    "url": "{[url]s}",
+                \\    "hash": "{[nix_hash]s}"
+                \\  }}{[comma]s}
+                \\
+            , .{
+                .zig_hash = zig_hash,
+                .name = name,
+                .url = url,
+                .nix_hash = nix_hash,
+                .comma = if (index < list.items.len - 1) "," else "",
+            });
+        }
+
+        try writer.writeAll("}\n");
+    }
+}
+
+fn sortByKey(_: void, lhs: []const u8, rhs: []const u8) bool {
+    return std.mem.lessThan(u8, lhs, rhs);
 }
 
 fn sortByMap(map: *const std.StringArrayHashMapUnmanaged([]const u8), lhs: []const u8, rhs: []const u8) bool {
