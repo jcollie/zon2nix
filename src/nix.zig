@@ -56,6 +56,14 @@ fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) ![]cons
     defer stdout.deinit(alloc);
 
     nix_prefetch_git: {
+        var envmap = try std.process.getEnvMap(alloc);
+        defer envmap.deinit();
+
+        try envmap.put("TMPDIR", tmpdir.path);
+        try envmap.put("TMP", tmpdir.path);
+        try envmap.put("TEMP", tmpdir.path);
+        try envmap.put("TEMPDIR", tmpdir.path);
+
         var stderr: std.ArrayListUnmanaged(u8) = .empty;
         defer stderr.deinit(alloc);
 
@@ -73,6 +81,7 @@ fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) ![]cons
             },
             alloc,
         );
+        nix_prefetch_git.env_map = &envmap;
         nix_prefetch_git.stdout_behavior = .Pipe;
         nix_prefetch_git.stderr_behavior = .Pipe;
         try nix_prefetch_git.spawn();
