@@ -10,7 +10,7 @@ pub const std_options: std.Options = .{
 
 const log = std.log.scoped(.zon2nix);
 
-var verbose: u3 = 1;
+var verbose: u3 = 2;
 var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
 
 pub fn myLogFn(
@@ -223,8 +223,24 @@ pub fn main() !void {
                     continue;
                 };
 
-                try urls.put(alloc, try alloc.dupe(u8, zig_hash), try alloc.dupe(u8, url));
-                try names.put(alloc, try alloc.dupe(u8, zig_hash), try alloc.dupe(u8, name));
+                if (urls.get(zig_hash)) |old_url| {
+                    if (!std.mem.eql(u8, old_url, url)) {
+                        log.warn("zig hash {s} downloaded from multiple urls:", .{zig_hash});
+                        log.warn("  1st url: {s}", .{old_url});
+                        log.warn("  2nd url: {s}", .{url});
+                    }
+                } else {
+                    try urls.put(alloc, try alloc.dupe(u8, zig_hash), try alloc.dupe(u8, url));
+                }
+                if (names.get(zig_hash)) |old_name| {
+                    if (!std.mem.eql(u8, old_name, name)) {
+                        log.warn("zig hash {s} referenced by multiple names:", .{zig_hash});
+                        log.warn("  1st name: {s}", .{old_name});
+                        log.warn("  2nd name: {s}", .{name});
+                    }
+                } else {
+                    try names.put(alloc, try alloc.dupe(u8, zig_hash), try alloc.dupe(u8, name));
+                }
 
                 const cache_path = try zon2nix.zig.fetch(alloc, url, zig_hash, .{ .zig = options.zig });
                 defer alloc.free(cache_path);
@@ -249,8 +265,16 @@ pub fn main() !void {
                     const nix_hash = try zon2nix.nix.fetch(alloc, url, .{ .nix_prefetch_git = options.nix_prefetch_git });
                     defer alloc.free(nix_hash);
                     log.debug("nix hash for {s} is {s}", .{ zig_hash, nix_hash });
-
-                    try nix_hashes.put(alloc, try alloc.dupe(u8, zig_hash), try alloc.dupe(u8, nix_hash));
+                    if (nix_hashes.get(zig_hash)) |old_nix_hash| {
+                        if (!std.mem.eql(u8, old_nix_hash, nix_hash)) {
+                            log.err("zig hash {s} resulted in different nix hashes:", .{zig_hash});
+                            log.err("  1st nix hash: {s}", .{old_nix_hash});
+                            log.err("  2nd nix hash: {s}", .{nix_hash});
+                            return error.NixHashMismatch;
+                        }
+                    } else {
+                        try nix_hashes.put(alloc, try alloc.dupe(u8, zig_hash), try alloc.dupe(u8, nix_hash));
+                    }
                 }
             }
 
