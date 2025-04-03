@@ -119,7 +119,11 @@ pub fn fetch(alloc: std.mem.Allocator, url: []const u8, expected_hash: []const u
 
     const found_hash = std.mem.trim(u8, stdout.items, &std.ascii.whitespace);
 
-    if (!std.mem.eql(u8, expected_hash, found_hash)) return error.HashMismatch;
+    if (!std.mem.eql(u8, expected_hash, found_hash)) {
+        log.err("expected: {s}", .{expected_hash});
+        log.err("actual:   {s}", .{found_hash});
+        return error.HashMismatch;
+    }
 
     // insurance
     try std.fs.accessAbsolute(cache_path, .{});
