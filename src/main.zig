@@ -242,23 +242,25 @@ pub fn main() !void {
                     try names.put(alloc, try alloc.dupe(u8, zig_hash), try alloc.dupe(u8, name));
                 }
 
-                const cache_path = try zon2nix.zig.fetch(alloc, url, zig_hash, .{ .zig = options.zig });
-                defer alloc.free(cache_path);
+                {
+                    const cache_path = try zon2nix.zig.fetch(alloc, url, zig_hash, .{ .zig = options.zig });
+                    defer alloc.free(cache_path);
 
-                const new_path = try std.fs.path.join(
-                    alloc,
-                    &.{
-                        cache_path,
-                        "build.zig.zon",
-                    },
-                );
-                errdefer alloc.free(new_path);
+                    const new_path = try std.fs.path.join(
+                        alloc,
+                        &.{
+                            cache_path,
+                            "build.zig.zon",
+                        },
+                    );
+                    errdefer alloc.free(new_path);
 
-                log.debug("adding to paths: {s}", .{new_path});
-                try paths.append(
-                    alloc,
-                    new_path,
-                );
+                    log.debug("adding to paths: {s}", .{new_path});
+                    try paths.append(
+                        alloc,
+                        new_path,
+                    );
+                }
 
                 // if we're not outputting a nix derivation or json, skip fetching the hash
                 if (nix_out != null or json_out != null) {
