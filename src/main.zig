@@ -29,10 +29,7 @@ pub fn myLogFn(
     const prefix = @tagName(level) ++ "(" ++ @tagName(scope) ++ "): ";
 
     // Print the message to stderr, silently ignoring any errors
-    std.debug.lockStdErr();
-    defer std.debug.unlockStdErr();
-    const stderr = std.io.getStdErr().writer();
-    nosuspend stderr.print(prefix ++ format ++ "\n", args) catch return;
+    std.debug.print(prefix ++ format ++ "\n", args);
 }
 
 pub fn main() !void {
@@ -199,8 +196,10 @@ pub fn main() !void {
         };
         defer file.close();
 
-        var build_zig_zon: zon2nix.BuildZigZon = undefined;
-        try build_zig_zon.init(alloc, file.reader().any());
+        var buffer: [1024]u8 = undefined;
+        var reader = file.reader(&buffer);
+
+        var build_zig_zon: zon2nix.BuildZigZon = try .init(alloc, &reader.interface);
         defer build_zig_zon.deinit();
 
         var it = build_zig_zon.dependencies.iterator();
@@ -246,20 +245,22 @@ pub fn main() !void {
                     const cache_path = try zon2nix.zig.fetch(alloc, url, zig_hash, .{ .zig = options.zig });
                     defer alloc.free(cache_path);
 
-                    const new_path = try std.fs.path.join(
-                        alloc,
-                        &.{
-                            cache_path,
-                            "build.zig.zon",
-                        },
-                    );
-                    errdefer alloc.free(new_path);
+                    {
+                        const new_path = try std.fs.path.join(
+                            alloc,
+                            &.{
+                                cache_path,
+                                "build.zig.zon",
+                            },
+                        );
+                        errdefer alloc.free(new_path);
 
-                    log.debug("adding to paths: {s}", .{new_path});
-                    try paths.append(
-                        alloc,
-                        new_path,
-                    );
+                        log.debug("adding to paths: {s}", .{new_path});
+                        try paths.append(
+                            alloc,
+                            new_path,
+                        );
+                    }
                 }
 
                 // if we're not outputting a nix derivation or json, skip fetching the hash
@@ -318,32 +319,36 @@ pub fn main() !void {
         // output a list of URLs
         var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer file.close();
-        const writer = file.writer();
+        var buffer: [64]u8 = undefined;
+        var writer = file.writer(&buffer);
 
         std.mem.sort([]const u8, list.items, &urls, sortByMap);
 
         for (list.items) |zig_hash| {
             const url = urls.get(zig_hash) orelse unreachable;
-            try writer.print("{s}\n", .{url});
+            try writer.interface.print("{s}\n", .{url});
         }
+
+        try writer.interface.flush();
     }
 
     if (nix_out) |path| {
         // output a Nix derivation
         var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer file.close();
-        const writer = file.writer();
+        var buffer: [64]u8 = undefined;
+        var writer = file.writer(&buffer);
 
         std.mem.sort([]const u8, list.items, &names, sortByMap);
 
-        try writer.writeAll(@embedFile("header.nix"));
+        try writer.interface.writeAll(@embedFile("header.nix"));
 
         for (list.items) |zig_hash| {
             const name = names.get(zig_hash) orelse return error.MissingName;
             const url = urls.get(zig_hash) orelse return error.MissingUrl;
             const nix_hash = nix_hashes.get(zig_hash) orelse return error.MissingNixHash;
 
-            try writer.print(
+            try writer.interface.print(
                 \\  {{
                 \\    name = "{[zig_hash]s}";
                 \\    path = fetchZigArtifact {{
@@ -361,25 +366,27 @@ pub fn main() !void {
             });
         }
 
-        try writer.writeAll("]\n");
+        try writer.interface.writeAll("]\n");
+        try writer.interface.flush();
     }
 
     if (json_out) |path| {
         // output a json object
         var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer file.close();
-        const writer = file.writer();
+        var buffer: [64]u8 = undefined;
+        var writer = file.writer(&buffer);
 
         std.mem.sort([]const u8, list.items, &names, sortByMap);
 
-        try writer.writeAll("{\n");
+        try writer.interface.writeAll("{\n");
 
         for (list.items, 0..) |zig_hash, index| {
             const name = names.get(zig_hash) orelse return error.MissingName;
             const url = urls.get(zig_hash) orelse return error.MissingUrl;
             const nix_hash = nix_hashes.get(zig_hash) orelse return error.MissingNixHash;
 
-            try writer.print(
+            try writer.interface.print(
                 \\  "{[zig_hash]s}": {{
                 \\    "name": "{[name]s}",
                 \\    "url": "{[url]s}",
@@ -395,7 +402,8 @@ pub fn main() !void {
             });
         }
 
-        try writer.writeAll("}\n");
+        try writer.interface.writeAll("}\n");
+        try writer.interface.flush();
     }
 }
 

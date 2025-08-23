@@ -16,13 +16,13 @@ pub const Dependency = struct {
     lazy: bool = false,
 };
 
-pub fn init(self: *BuildZigZon, allocator: std.mem.Allocator, reader: std.io.AnyReader) !void {
-    self.* = .{
+pub fn init(allocator: std.mem.Allocator, reader: *std.Io.Reader) !BuildZigZon {
+    var self: BuildZigZon = .{
         .arena = std.heap.ArenaAllocator.init(allocator),
     };
 
     const content = content: {
-        const content = try reader.readAllAlloc(allocator, std.math.maxInt(usize));
+        const content = try reader.allocRemaining(allocator, .unlimited);
         defer allocator.free(content);
         break :content try allocator.dupeZ(u8, content);
     };
@@ -84,21 +84,11 @@ pub fn init(self: *BuildZigZon, allocator: std.mem.Allocator, reader: std.io.Any
             }
         }
     }
+
+    return self;
 }
 
 pub fn deinit(self: *BuildZigZon) void {
     self.arena.deinit();
     self.* = undefined;
 }
-
-// test {
-//     const allocator = std.testing.allocator;
-//     var json = std.ArrayList(u8).init(allocator);
-//     defer json.deinit();
-//     var file = try std.fs.cwd().openFile("build.zig.zon", .{ .mode = .read_only });
-//     defer file.close();
-//     try parse(allocator, file.reader().any(), json.writer(), {}, .{});
-//     try std.testing.expectEqualStrings(
-//         \\{"name":"zon2json","version":"0.0.0","dependencies":{},"paths":["src","build.zig","build.zig.zon","LICENSE"]}
-//     , json.items);
-// }

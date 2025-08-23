@@ -3,9 +3,9 @@
   stdenvNoCC,
   makeWrapper,
   nix-prefetch-git,
-  zig_0_14,
+  zig_0_15,
 }: let
-  zig_hook = zig_0_14.hook.overrideAttrs {
+  zig_hook = zig_0_15.hook.overrideAttrs {
     zig_default_flags = "-Dcpu=baseline -Doptimize=Debug --color off";
   };
 in
@@ -18,7 +18,7 @@ in
         makeWrapper
       ];
       zigBuildFlags = [
-        "-Dzig=${lib.getExe zig_0_14}"
+        "-Dzig=${lib.getExe zig_0_15}"
         "-Dnix-prefetch-git=${nix-prefetch-git}/bin/nix-prefetch-git"
       ];
       meta = {

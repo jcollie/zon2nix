@@ -49,21 +49,37 @@ pub fn getGlobalCacheDir(alloc: std.mem.Allocator, options: Options) ![]const u8
         global_cache_dir: ?[]const u8,
     };
 
-    const parsed = try std.json.parseFromSlice(
-        Env,
-        alloc,
-        stdout.items,
-        .{ .ignore_unknown_fields = true },
-    );
-    defer parsed.deinit();
+    const cache_dir = if (std.mem.startsWith(u8, stdout.items, ".{")) zon: {
+        try stdout.append(alloc, '\x00');
+        const parsed = try std.zon.parse.fromSlice(
+            Env,
+            alloc,
+            stdout.items[0 .. stdout.items.len - 1 :0],
+            null,
+            .{ .ignore_unknown_fields = true },
+        );
+        defer std.zon.parse.free(alloc, parsed);
+        const cache_dir = try alloc.dupe(u8, parsed.global_cache_dir orelse return error.GettingZigEnv);
+        break :zon cache_dir;
+    } else json: {
+        const parsed = try std.json.parseFromSlice(
+            Env,
+            alloc,
+            stdout.items,
+            .{ .ignore_unknown_fields = true },
+        );
+        defer parsed.deinit();
 
-    const cache_dir = try alloc.dupe(
-        u8,
-        parsed.value.global_cache_dir orelse return error.GettingZigEnv,
-    );
-    errdefer alloc.free(cache_dir);
+        const cache_dir = try alloc.dupe(
+            u8,
+            parsed.value.global_cache_dir orelse return error.GettingZigEnv,
+        );
+        break :json cache_dir;
+    };
 
     global_cache_dir = cache_dir;
+
+    log.debug("global cache dir: {s}", .{cache_dir});
 
     return cache_dir;
 }

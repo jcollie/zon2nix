@@ -32,12 +32,17 @@ fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) ![]cons
             defer arena.deinit();
             const fragment = try component.toRawMaybeAlloc(arena.allocator());
             var buf: std.ArrayListUnmanaged(u8) = .empty;
-            const writer = buf.writer(arena.allocator());
-            try uri.writeToStream(.{
-                .scheme = true,
-                .authority = true,
-                .path = true,
-            }, writer);
+            var buffer: [64]u8 = undefined;
+            var writer = buf.writer(arena.allocator()).adaptToNewApi(&buffer);
+            try uri.writeToStream(
+                &writer.new_interface,
+                .{
+                    .scheme = true,
+                    .authority = true,
+                    .path = true,
+                },
+            );
+            try writer.new_interface.flush();
             break :blk .{ try alloc.dupe(u8, buf.items), try alloc.dupe(u8, fragment) };
         }
         break :blk .{ try alloc.dupe(u8, url), try alloc.dupe(u8, "HEAD") };
@@ -52,7 +57,7 @@ fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) ![]cons
     const path = try std.fs.path.join(alloc, &.{ tmpdir.path, "artifact.git" });
     defer alloc.free(path);
 
-    var stdout: std.ArrayListUnmanaged(u8) = .empty;
+    var stdout: std.ArrayList(u8) = .empty;
     defer stdout.deinit(alloc);
 
     nix_prefetch_git: {
@@ -64,7 +69,7 @@ fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) ![]cons
         try envmap.put("TEMP", tmpdir.path);
         try envmap.put("TEMPDIR", tmpdir.path);
 
-        var stderr: std.ArrayListUnmanaged(u8) = .empty;
+        var stderr: std.ArrayList(u8) = .empty;
         defer stderr.deinit(alloc);
 
         var nix_prefetch_git = std.process.Child.init(
@@ -97,6 +102,7 @@ fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) ![]cons
         };
 
         if (stderr.items.len > 0) log.err("{s}", .{stderr.items});
+
         switch (term) {
             .Exited => |status| {
                 if (status == 0) break :nix_prefetch_git;
@@ -133,31 +139,27 @@ fn fetchPlain(alloc: std.mem.Allocator, url: []const u8, _: Options) ![]const u8
     var client = std.http.Client{ .allocator = alloc };
     defer client.deinit();
 
-    var header_buf: [16384]u8 = undefined;
-    const uri = try std.Uri.parse(url);
-    var req = try client.open(.GET, uri, .{ .server_header_buffer = &header_buf });
-    defer req.deinit();
+    var writer: std.Io.Writer.Allocating = .init(alloc);
+    defer writer.deinit();
 
-    try req.send();
-    try req.finish();
-    try req.wait();
+    const status = status: {
+        const uri = try std.Uri.parse(url);
+        const result = try client.fetch(.{
+            .method = .GET,
+            .location = .{ .uri = uri },
+            .response_writer = &writer.writer,
+        });
+        break :status result.status;
+    };
 
-    if (req.response.status != .ok) return error.BadHttpStatus;
+    if (status != .ok) return error.BadHttpStatus;
 
-    var rdr = req.reader();
-    var body_buf: [std.math.maxInt(u20)]u8 = undefined;
-    while (true) {
-        const len = try rdr.read(&body_buf);
-        if (len == 0) break;
-        const data = body_buf[0..len];
-        hash.update(data);
-    }
+    try writer.writer.flush();
+
+    hash.update(writer.written());
 
     var final: [Hash.digest_length]u8 = undefined;
     hash.final(&final);
-    const encoder = std.base64.standard.Encoder;
-    var buffer: [encoder.calcSize(final.len)]u8 = undefined;
-    const encoded = encoder.encode(&buffer, &final);
 
-    return try std.fmt.allocPrint(alloc, "sha256-{s}", .{encoded});
+    return try std.fmt.allocPrint(alloc, "sha256-{b64}", .{final});
 }

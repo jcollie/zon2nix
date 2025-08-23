@@ -1,12 +1,14 @@
 .{
     .name = .zon2nix,
-    .version = "0.2.0",
+    .version = "0.3.0",
     .fingerprint = 0xf85edb58f3e511f2,
+    .minimum_zig_version = "0.15.1",
     .dependencies = .{},
     .paths = .{
         "src",
         "build.zig",
         "build.zig.zon",
         "LICENSE",
+        "README.md",
     },
 }
