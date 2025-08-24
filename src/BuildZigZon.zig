@@ -6,7 +6,7 @@ arena: std.heap.ArenaAllocator,
 name: ?[]const u8 = null,
 version: ?[]const u8 = null,
 fingerprint: ?u64 = null,
-paths: std.ArrayListUnmanaged([]const u8) = .empty,
+paths: std.ArrayList([]const u8) = .empty,
 dependencies: std.StringArrayHashMapUnmanaged(Dependency) = .empty,
 
 pub const Dependency = struct {

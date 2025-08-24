@@ -33,7 +33,7 @@ fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) !Hashes
             var arena = std.heap.ArenaAllocator.init(alloc);
             defer arena.deinit();
             const fragment = try component.toRawMaybeAlloc(arena.allocator());
-            var buf: std.ArrayListUnmanaged(u8) = .empty;
+            var buf: std.ArrayList(u8) = .empty;
             var buffer: [64]u8 = undefined;
             var writer = buf.writer(arena.allocator()).adaptToNewApi(&buffer);
             try uri.writeToStream(

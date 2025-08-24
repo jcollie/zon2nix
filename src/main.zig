@@ -54,7 +54,7 @@ pub fn main() !void {
     defer zon2nix.zig.deinit(alloc);
 
     // stack of paths to build.zig.zon files that we need to visit
-    var paths: std.ArrayListUnmanaged([]const u8) = .empty;
+    var paths: std.ArrayList([]const u8) = .empty;
     defer {
         for (paths.items) |path| {
             alloc.free(path);
@@ -348,7 +348,7 @@ pub fn main() !void {
         }
     }
 
-    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    var list: std.ArrayList([]const u8) = .empty;
     // don't deallocate the actual entries as they will be
     // deallocated with the hash maps
     defer list.deinit(alloc);

@@ -17,11 +17,11 @@ pub fn deinit(alloc: std.mem.Allocator) void {
 pub fn getGlobalCacheDir(alloc: std.mem.Allocator, options: Options) ![]const u8 {
     if (global_cache_dir) |cache_dir| return cache_dir;
 
-    var stdout: std.ArrayListUnmanaged(u8) = .empty;
+    var stdout: std.ArrayList(u8) = .empty;
     defer stdout.deinit(alloc);
 
     get_zig_env: {
-        var stderr: std.ArrayListUnmanaged(u8) = .empty;
+        var stderr: std.ArrayList(u8) = .empty;
         defer stderr.deinit(alloc);
 
         var zig_env = std.process.Child.init(&.{ options.zig, "env" }, alloc);
@@ -97,12 +97,12 @@ pub fn fetch(alloc: std.mem.Allocator, url: []const u8, expected_hash: []const u
         return cache_path;
     }
 
-    var stdout: std.ArrayListUnmanaged(u8) = .empty;
+    var stdout: std.ArrayList(u8) = .empty;
     defer stdout.deinit(alloc);
 
     zig_fetch: {
         log.info("zig fetch {s}", .{url});
-        var stderr: std.ArrayListUnmanaged(u8) = .empty;
+        var stderr: std.ArrayList(u8) = .empty;
         defer stderr.deinit(alloc);
 
         var zig_fetch = std.process.Child.init(
