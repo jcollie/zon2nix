@@ -32,6 +32,13 @@ pub fn myLogFn(
     std.debug.print(prefix ++ format ++ "\n", args);
 }
 
+fn getParam(name: []const u8, arg: []const u8, it: *std.process.ArgIterator) !?[]const u8 {
+    if (!std.mem.startsWith(u8, arg, name)) return null;
+    const rest = arg[name.len..];
+    if (std.mem.startsWith(u8, rest, "=")) return rest[1..];
+    return it.next() orelse return error.MissingPath;
+}
+
 pub fn main() !void {
     const alloc, const is_debug = gpa: {
         break :gpa switch (builtin.mode) {
@@ -64,6 +71,9 @@ pub fn main() !void {
     var json_out: ?[]const u8 = null;
     defer if (json_out) |f| alloc.free(f);
 
+    var flatpak_out: ?[]const u8 = null;
+    defer if (flatpak_out) |f| alloc.free(f);
+
     {
         var it = try std.process.ArgIterator.initWithAllocator(alloc);
         defer it.deinit();
@@ -76,41 +86,37 @@ pub fn main() !void {
                 verbose = (verbose + 1) % 5;
                 continue;
             }
+
             if (std.mem.eql(u8, arg, "--quiet")) {
                 verbose -|= 1;
                 continue;
             }
+
             if (std.mem.eql(u8, arg, "--debug")) {
                 verbose = 4;
                 continue;
             }
-            if (std.mem.eql(u8, arg, "--txt")) {
-                txt_out = try alloc.dupe(u8, it.next() orelse return error.MissingPath);
+
+            if (try getParam("--txt", arg, &it)) |param| {
+                txt_out = try alloc.dupe(u8, param);
                 continue;
             }
-            if (std.mem.eql(u8, arg[0..6], "--txt=")) {
-                if (arg.len == 6) return error.MissingPath;
-                txt_out = try alloc.dupe(u8, arg[6..]);
+
+            if (try getParam("--nix", arg, &it)) |param| {
+                nix_out = try alloc.dupe(u8, param);
                 continue;
             }
-            if (std.mem.eql(u8, arg, "--nix")) {
-                nix_out = try alloc.dupe(u8, it.next() orelse return error.MissingPath);
+
+            if (try getParam("--json", arg, &it)) |param| {
+                json_out = try alloc.dupe(u8, param);
                 continue;
             }
-            if (std.mem.eql(u8, arg[0..6], "--nix=")) {
-                if (arg.len == 6) return error.MissingPath;
-                nix_out = try alloc.dupe(u8, arg[6..]);
+
+            if (try getParam("--flatpak", arg, &it)) |param| {
+                flatpak_out = try alloc.dupe(u8, param);
                 continue;
             }
-            if (std.mem.eql(u8, arg, "--json")) {
-                json_out = try alloc.dupe(u8, it.next() orelse return error.MissingPath);
-                continue;
-            }
-            if (std.mem.eql(u8, arg[0..7], "--json=")) {
-                if (arg.len == 7) return error.MissingPath;
-                json_out = try alloc.dupe(u8, arg[7..]);
-                continue;
-            }
+
             try paths.append(alloc, try alloc.dupe(u8, arg));
         }
     }
@@ -173,6 +179,17 @@ pub fn main() !void {
             alloc.free(entry.value_ptr.*);
         }
         nix_hashes.deinit(alloc);
+    }
+
+    // map zig hash -> sha256 hash
+    var sha256_hashes: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    defer {
+        var it = sha256_hashes.iterator();
+        while (it.next()) |entry| {
+            alloc.free(entry.key_ptr.*);
+            alloc.free(entry.value_ptr.*);
+        }
+        sha256_hashes.deinit(alloc);
     }
 
     // loop through all the paths
@@ -264,10 +281,18 @@ pub fn main() !void {
                 }
 
                 // if we're not outputting a nix derivation or json, skip fetching the hash
-                if (nix_out != null or json_out != null) {
-                    const nix_hash = try zon2nix.nix.fetch(alloc, url, .{ .nix_prefetch_git = options.nix_prefetch_git });
-                    defer alloc.free(nix_hash);
-                    log.debug("nix hash for {s} is {s}", .{ zig_hash, nix_hash });
+                if (nix_out != null or json_out != null or flatpak_out != null) {
+                    const nix_hash, const sha256_hash = try zon2nix.nix.fetch(
+                        alloc,
+                        url,
+                        .{ .nix_prefetch_git = options.nix_prefetch_git },
+                    );
+                    defer {
+                        alloc.free(nix_hash);
+                        alloc.free(sha256_hash);
+                    }
+                    log.debug("   nix hash for {s} is {s}", .{ zig_hash, nix_hash });
+                    log.debug("sha256 hash for {s} is {s}", .{ zig_hash, sha256_hash });
                     if (nix_hashes.get(zig_hash)) |old_nix_hash| {
                         if (!std.mem.eql(u8, old_nix_hash, nix_hash)) {
                             log.err("zig hash {s} resulted in different nix hashes:", .{zig_hash});
@@ -276,7 +301,25 @@ pub fn main() !void {
                             return error.NixHashMismatch;
                         }
                     } else {
-                        try nix_hashes.put(alloc, try alloc.dupe(u8, zig_hash), try alloc.dupe(u8, nix_hash));
+                        try nix_hashes.put(
+                            alloc,
+                            try alloc.dupe(u8, zig_hash),
+                            try alloc.dupe(u8, nix_hash),
+                        );
+                    }
+                    if (sha256_hashes.get(zig_hash)) |old_sha256_hash| {
+                        if (!std.mem.eql(u8, old_sha256_hash, sha256_hash)) {
+                            log.err("zig hash {s} resulted in different sha256 hashes:", .{zig_hash});
+                            log.err("  1st nix hash: {s}", .{old_sha256_hash});
+                            log.err("  2nd nix hash: {s}", .{sha256_hash});
+                            return error.Sha256HashMismatch;
+                        }
+                    } else {
+                        try sha256_hashes.put(
+                            alloc,
+                            try alloc.dupe(u8, zig_hash),
+                            try alloc.dupe(u8, sha256_hash),
+                        );
                     }
                 }
             }
@@ -403,6 +446,79 @@ pub fn main() !void {
         }
 
         try writer.interface.writeAll("}\n");
+        try writer.interface.flush();
+    }
+
+    if (flatpak_out) |path| {
+        var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+        defer file.close();
+        var buffer: [64]u8 = undefined;
+        var writer = file.writer(&buffer);
+
+        std.mem.sort([]const u8, list.items, &names, sortByMap);
+        try writer.interface.writeAll("[\n");
+
+        for (list.items, 0..) |zig_hash, index| {
+            const url = urls.get(zig_hash) orelse return error.MissingUrl;
+            const sha256_hash = sha256_hashes.get(zig_hash) orelse return error.MissingSha256Hash;
+
+            if (!std.mem.startsWith(u8, url, "git+")) {
+                try writer.interface.print(
+                    \\  {{
+                    \\    "type": "archive",
+                    \\    "url": "{[url]s}",
+                    \\    "dest": "vendor/p/{[zig_hash]s}",
+                    \\    "sha256": "{[sha256_hash]s}"
+                    \\  }}{[comma]s}
+                    \\
+                , .{
+                    .zig_hash = zig_hash,
+                    .url = url,
+                    .sha256_hash = sha256_hash,
+                    .comma = if (index < list.items.len - 1) "," else "",
+                });
+            } else {
+                const uri = try std.Uri.parse(url[4..]);
+                const commit = commit: {
+                    if (uri.fragment) |fragment| {
+                        var buf: std.Io.Writer.Allocating = .init(alloc);
+                        defer buf.deinit();
+                        try fragment.formatFragment(&buf.writer);
+                        break :commit try buf.toOwnedSlice();
+                    }
+                    log.warn("can't find commit in url {s}", .{url});
+                    continue;
+                };
+                defer alloc.free(commit);
+                const new_url = new_url: {
+                    var buf: std.Io.Writer.Allocating = .init(alloc);
+                    defer buf.deinit();
+                    try uri.writeToStream(&buf.writer, .{
+                        .scheme = true,
+                        .authority = true,
+                        .path = true,
+                    });
+                    break :new_url try buf.toOwnedSlice();
+                };
+                defer alloc.free(new_url);
+                try writer.interface.print(
+                    \\  {{
+                    \\    "type": "git",
+                    \\    "url": "{[url]s}",
+                    \\    "commit": "{[commit]s}",
+                    \\    "dest": "vendor/p/{[zig_hash]s}"
+                    \\  }}{[comma]s}
+                    \\
+                , .{
+                    .zig_hash = zig_hash,
+                    .url = new_url,
+                    .commit = commit,
+                    .comma = if (index < list.items.len - 1) "," else "",
+                });
+            }
+        }
+
+        try writer.interface.writeAll("]\n");
         try writer.interface.flush();
     }
 }

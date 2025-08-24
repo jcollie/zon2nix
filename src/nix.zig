@@ -8,7 +8,9 @@ pub const Options = struct {
     nix_prefetch_git: []const u8 = "nix-prefetch-git",
 };
 
-pub fn fetch(alloc: std.mem.Allocator, url: []const u8, options: Options) ![]const u8 {
+const Hashes = std.meta.Tuple(&.{ []const u8, []const u8 });
+
+pub fn fetch(alloc: std.mem.Allocator, url: []const u8, options: Options) !Hashes {
     const u = try std.Uri.parse(url);
 
     if (std.mem.eql(u8, u.scheme, "git+http")) return try fetchGit(alloc, url, options);
@@ -20,7 +22,7 @@ pub fn fetch(alloc: std.mem.Allocator, url: []const u8, options: Options) ![]con
     return error.UnsupportedScheme;
 }
 
-fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) ![]const u8 {
+fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) !Hashes {
     log.debug("nix fetch git: {s}", .{url});
 
     var uri = try std.Uri.parse(url);
@@ -114,23 +116,34 @@ fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) ![]cons
         }
     }
 
-    const Hash = struct {
+    const Output = struct {
         hash: ?[]const u8,
     };
     const parsed = try std.json.parseFromSlice(
-        Hash,
+        Output,
         alloc,
         stdout.items,
         .{ .ignore_unknown_fields = true },
     );
     defer parsed.deinit();
     if (parsed.value.hash) |hash| {
-        return try alloc.dupe(u8, hash);
+        if (!std.mem.startsWith(u8, hash, "sha256-")) return error.UnsupportedNixHash;
+        const decoder = std.base64.standard.Decoder;
+        const Hash = std.crypto.hash.sha2.Sha256;
+        if (try decoder.calcSizeForSlice(hash[7..]) != Hash.digest_length) return error.HashLengthMismatch;
+        var final: [Hash.digest_length]u8 = undefined;
+        try decoder.decode(&final, hash[7..]);
+        const hex = std.fmt.bytesToHex(final, .lower);
+
+        return .{
+            try alloc.dupe(u8, hash),
+            try alloc.dupe(u8, &hex),
+        };
     }
     return error.HashNotFound;
 }
 
-fn fetchPlain(alloc: std.mem.Allocator, url: []const u8, _: Options) ![]const u8 {
+fn fetchPlain(alloc: std.mem.Allocator, url: []const u8, _: Options) !Hashes {
     log.debug("nix fetch plain: {s}", .{url});
 
     const Hash = std.crypto.hash.sha2.Sha256;
@@ -160,6 +173,10 @@ fn fetchPlain(alloc: std.mem.Allocator, url: []const u8, _: Options) ![]const u8
 
     var final: [Hash.digest_length]u8 = undefined;
     hash.final(&final);
+    const hex = std.fmt.bytesToHex(final, .lower);
 
-    return try std.fmt.allocPrint(alloc, "sha256-{b64}", .{final});
+    return .{
+        try std.fmt.allocPrint(alloc, "sha256-{b64}", .{final}),
+        try alloc.dupe(u8, &hex),
+    };
 }
