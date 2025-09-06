@@ -43,5 +43,4 @@
         zon2nix = pkgs.callPackage ./package.nix { };
       });
     };
-
 }
