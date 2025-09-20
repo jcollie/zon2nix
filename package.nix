@@ -3,6 +3,7 @@
   stdenvNoCC,
   makeWrapper,
   nix-prefetch-git,
+  nixfmt-rfc-style,
   zig_0_15,
 }:
 let
@@ -17,9 +18,15 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     zig_hook
     makeWrapper
   ];
+  depsHostHostPropagated = [
+    zig_0_15
+    nix-prefetch-git
+    nixfmt-rfc-style
+  ];
   zigBuildFlags = [
     "-Dzig=${lib.getExe zig_0_15}"
     "-Dnix-prefetch-git=${nix-prefetch-git}/bin/nix-prefetch-git"
+    "-Dnixfmt=${lib.getExe nixfmt-rfc-style}"
   ];
   meta = {
     mainProgram = "zon2nix";

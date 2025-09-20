@@ -377,21 +377,50 @@ pub fn main() !void {
 
     if (nix_out) |path| {
         // output a Nix derivation
-        var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
-        defer file.close();
-        var buffer: [64]u8 = undefined;
-        var writer = file.writer(&buffer);
+
+        const StreamToFile = struct {
+            fn streamer(in: *std.Io.Reader, out: *std.Io.Writer) !void {
+                _ = try in.streamRemaining(out);
+                try out.flush();
+            }
+        };
 
         std.mem.sort([]const u8, list.items, &names, sortByMap);
 
-        try writer.interface.writeAll(@embedFile("header.nix"));
+        var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+        defer file.close();
+        var file_buffer: [64]u8 = undefined;
+        var file_writer = file.writer(&file_buffer);
+
+        var nixfmt: std.process.Child = .init(&.{options.nixfmt}, alloc);
+        nixfmt.stdin_behavior = .Pipe;
+        nixfmt.stdout_behavior = .Pipe;
+
+        try nixfmt.spawn();
+        errdefer _ = nixfmt.kill() catch {};
+
+        const stdin = nixfmt.stdin orelse return error.ExecFailed;
+        var stdin_buf: [1024]u8 = undefined;
+        var stdin_writer = stdin.writer(&stdin_buf);
+
+        const stdout = nixfmt.stdout orelse return error.ExecFailed;
+        var stdout_buf: [1024]u8 = undefined;
+        var stdout_reader = stdout.reader(&stdout_buf);
+
+        const stream_to_file = try std.Thread.spawn(
+            .{},
+            StreamToFile.streamer,
+            .{ &stdout_reader.interface, &file_writer.interface },
+        );
+
+        try stdin_writer.interface.writeAll(@embedFile("header.nix"));
 
         for (list.items) |zig_hash| {
             const name = names.get(zig_hash) orelse return error.MissingName;
             const url = urls.get(zig_hash) orelse return error.MissingUrl;
             const nix_hash = nix_hashes.get(zig_hash) orelse return error.MissingNixHash;
 
-            try writer.interface.print(
+            try stdin_writer.interface.print(
                 \\  {{
                 \\    name = "{[zig_hash]s}";
                 \\    path = fetchZigArtifact {{
@@ -409,8 +438,11 @@ pub fn main() !void {
             });
         }
 
-        try writer.interface.writeAll("]\n");
-        try writer.interface.flush();
+        try stdin_writer.interface.writeAll("]\n");
+        try stdin_writer.interface.flush();
+        stdin.close();
+
+        stream_to_file.join();
     }
 
     if (json_out) |path| {

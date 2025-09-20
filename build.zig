@@ -6,10 +6,12 @@ pub fn build(b: *std.Build) void {
 
     const zig = b.option([]const u8, "zig", "Path to zig") orelse "zig";
     const nix_prefetch_git = b.option([]const u8, "nix-prefetch-git", "Path to nix-prefetch-git") orelse "nix-prefetch-git";
+    const nixfmt = b.option([]const u8, "nixfmt", "Path to nixfmt") orelse "nixfmtt";
 
     const options = b.addOptions();
     options.addOption([]const u8, "zig", zig);
     options.addOption([]const u8, "nix_prefetch_git", nix_prefetch_git);
+    options.addOption([]const u8, "nixfmt", nixfmt);
 
     const root_mod = b.addModule(
         "zon2nix",
