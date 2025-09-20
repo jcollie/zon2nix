@@ -4,6 +4,11 @@ const options = @import("options");
 
 const zon2nix = @import("zon2nix");
 
+pub const ZigVersion = enum {
+    @"14",
+    @"15",
+};
+
 pub const std_options: std.Options = .{
     .logFn = myLogFn,
 };
@@ -62,6 +67,8 @@ pub fn main() !void {
         paths.deinit(alloc);
     }
 
+    var zig_version: ZigVersion = .@"14";
+
     var txt_out: ?[]const u8 = null;
     defer if (txt_out) |f| alloc.free(f);
 
@@ -94,6 +101,16 @@ pub fn main() !void {
 
             if (std.mem.eql(u8, arg, "--debug")) {
                 verbose = 4;
+                continue;
+            }
+
+            if (std.mem.eql(u8, arg, "--14")) {
+                zig_version = .@"14";
+                continue;
+            }
+
+            if (std.mem.eql(u8, arg, "--15")) {
+                zig_version = .@"15";
                 continue;
             }
 
@@ -413,7 +430,10 @@ pub fn main() !void {
             .{ &stdout_reader.interface, &file_writer.interface },
         );
 
-        try stdin_writer.interface.writeAll(@embedFile("header.nix"));
+        try stdin_writer.interface.writeAll(switch (zig_version) {
+            .@"14" => @embedFile("header_0_14.nix"),
+            .@"15" => @embedFile("header_0_15.nix"),
+        });
 
         for (list.items) |zig_hash| {
             const name = names.get(zig_hash) orelse return error.MissingName;
