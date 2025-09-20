@@ -1,7 +1,6 @@
 {
   lib,
   stdenvNoCC,
-  makeWrapper,
   nix-prefetch-git,
   nixfmt-rfc-style,
   zig_0_15,
@@ -16,12 +15,6 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   src = lib.cleanSource ./.;
   nativeBuildInputs = [
     zig_hook
-    makeWrapper
-  ];
-  depsHostHostPropagated = [
-    zig_0_15
-    nix-prefetch-git
-    nixfmt-rfc-style
   ];
   zigBuildFlags = [
     "-Dzig=${lib.getExe zig_0_15}"
