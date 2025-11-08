@@ -29,7 +29,7 @@
     in
     {
       devShells = forAllSystems (pkgs: {
-        default = self.devShells.${pkgs.system}.zig_0_15;
+        default = self.devShells.${pkgs.hostPlatform.system}.zig_0_15;
         zig_0_15 = pkgs.mkShell {
           packages = [
             pkgs.zig_0_15
