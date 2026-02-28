@@ -2,24 +2,21 @@
   lib,
   stdenvNoCC,
   nix-prefetch-git,
-  nixfmt-rfc-style,
-  zig_0_15,
+  nixfmt,
+  zig,
 }:
 let
-  zig_hook = zig_0_15.hook.overrideAttrs {
-    zig_default_flags = "-Dcpu=baseline -Doptimize=Debug --color off";
-  };
 in
 stdenvNoCC.mkDerivation (finalAttrs: {
   name = "zon2nix";
   src = lib.cleanSource ./.;
   nativeBuildInputs = [
-    zig_hook
+    zig
   ];
   zigBuildFlags = [
-    "-Dzig=${lib.getExe zig_0_15}"
+    "-Dzig=${lib.getExe zig}"
     "-Dnix-prefetch-git=${nix-prefetch-git}/bin/nix-prefetch-git"
-    "-Dnixfmt=${lib.getExe nixfmt-rfc-style}"
+    "-Dnixfmt=${lib.getExe nixfmt}"
   ];
   meta = {
     mainProgram = "zon2nix";

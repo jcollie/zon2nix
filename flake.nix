@@ -1,5 +1,5 @@
 {
-  description = "zig2nix";
+  description = "zon2nix";
 
   inputs = {
     nixpkgs.url = "https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz";
@@ -29,12 +29,12 @@
     in
     {
       devShells = forAllSystems (pkgs: {
-        default = self.devShells.${pkgs.hostPlatform.system}.zig_0_15;
+        default = self.devShells.${pkgs.stdenv.hostPlatform.system}.zig_0_15;
         zig_0_15 = pkgs.mkShell {
           packages = [
-            pkgs.zig_0_15
+            pkgs.zig
             pkgs.nix-prefetch-git
-            pkgs.nixfmt-rfc-style
+            pkgs.nixfmt
             pkgs.valgrind
           ];
         };
