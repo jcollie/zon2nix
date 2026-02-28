@@ -67,7 +67,7 @@ pub fn main() !void {
         paths.deinit(alloc);
     }
 
-    var zig_version: ZigVersion = .@"14";
+    var zig_version: ZigVersion = .@"15";
 
     var txt_out: ?[]const u8 = null;
     defer if (txt_out) |f| alloc.free(f);
