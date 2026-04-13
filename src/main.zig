@@ -445,7 +445,7 @@ pub fn main(init: std.process.Init) !void {
         try stdin_writer.interface.writeAll(switch (zig_version) {
             .@"14" => @embedFile("header_0_14.nix"),
             .@"15" => @embedFile("header_0_15.nix"),
-            .@"16" => @embedFile("header_0_15.nix"),
+            .@"16" => @embedFile("header_0_16.nix"),
         });
 
         for (list.items) |zig_hash| {
