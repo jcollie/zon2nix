@@ -83,7 +83,7 @@ pub fn deinit(alloc: std.mem.Allocator) void {
 
 pub fn fetch(alloc: std.mem.Allocator, io: std.Io, url: []const u8, expected_hash: []const u8, options: Options) ![]const u8 {
     const cache_path = cache_path: {
-        const sixteen = std.SemanticVersion{ .major = 0, .minor = 16, .patch = 0 };
+        const sixteen = std.SemanticVersion{ .major = 0, .minor = 16, .patch = 0, .pre = "dev" };
         if (version.order(sixteen) == .lt) {
             break :cache_path try std.fs.path.join(alloc, &.{ global_cache_dir, "p", expected_hash });
         } else {
