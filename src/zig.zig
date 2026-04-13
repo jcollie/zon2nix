@@ -5,7 +5,7 @@ const log = std.log.scoped(.zig);
 var version_string: []const u8 = undefined;
 var version: std.SemanticVersion = undefined;
 var global_cache_dir: []const u8 = undefined;
-var root_pkg_dir: [:0]const u8 = undefined;
+var root_pkg_dir: []const u8 = undefined;
 
 pub const Options = struct {
     zig: []const u8 = "zig",
@@ -66,9 +66,13 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, options: Options) !void {
         version = try .parse(version_string);
         global_cache_dir = try alloc.dupe(u8, parsed.value.global_cache_dir orelse return error.GettingZigEnv);
     }
+    errdefer alloc.free(version_string);
+    errdefer alloc.free(global_cache_dir);
 
     const cwd: std.Io.Dir = .cwd();
-    root_pkg_dir = try cwd.realPathFileAlloc(io, "zig-pkg", alloc);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const len = try cwd.realPathFile(io, ".", &buf);
+    root_pkg_dir = try std.fs.path.join(alloc, &.{ buf[0..len], "zig-pkg" });
 }
 
 pub fn deinit(alloc: std.mem.Allocator) void {
@@ -80,10 +84,10 @@ pub fn deinit(alloc: std.mem.Allocator) void {
 pub fn fetch(alloc: std.mem.Allocator, io: std.Io, url: []const u8, expected_hash: []const u8, options: Options) ![]const u8 {
     const cache_path = cache_path: {
         const sixteen = std.SemanticVersion{ .major = 0, .minor = 16, .patch = 0 };
-        if (sixteen.order(version) != .lt) {
-            break :cache_path try std.fs.path.join(alloc, &.{ root_pkg_dir, expected_hash });
-        } else {
+        if (version.order(sixteen) == .lt) {
             break :cache_path try std.fs.path.join(alloc, &.{ global_cache_dir, "p", expected_hash });
+        } else {
+            break :cache_path try std.fs.path.join(alloc, &.{ root_pkg_dir, expected_hash });
         }
     };
     errdefer alloc.free(cache_path);
