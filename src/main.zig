@@ -7,6 +7,7 @@ const zon2nix = @import("zon2nix");
 pub const ZigVersion = enum {
     @"14",
     @"15",
+    @"16",
 };
 
 pub const std_options: std.Options = .{
@@ -37,26 +38,16 @@ pub fn myLogFn(
     std.debug.print(prefix ++ format ++ "\n", args);
 }
 
-fn getParam(name: []const u8, arg: []const u8, it: *std.process.ArgIterator) !?[]const u8 {
-    if (!std.mem.startsWith(u8, arg, name)) return null;
-    const rest = arg[name.len..];
-    if (std.mem.startsWith(u8, rest, "=")) return rest[1..];
-    return it.next() orelse return error.MissingPath;
+fn getParam(name: []const u8, arg: []const u8, it: *std.process.Args.Iterator) !?[]const u8 {
+    const rest = std.mem.cutPrefix(u8, arg, name) orelse return null;
+    return std.mem.cutPrefix(u8, rest, "=") orelse return it.next() orelse return error.MissingPath;
 }
 
-pub fn main() !void {
-    const alloc, const is_debug = gpa: {
-        break :gpa switch (builtin.mode) {
-            .Debug, .ReleaseSafe => .{ debug_allocator.allocator(), true },
-            .ReleaseFast, .ReleaseSmall => .{ std.heap.smp_allocator, false },
-        };
-    };
-    defer if (is_debug) {
-        _ = debug_allocator.deinit();
-    };
+pub fn main(init: std.process.Init) !void {
+    const alloc = init.gpa;
+    const io = init.io;
 
-    zon2nix.zig.init(alloc);
-    defer zon2nix.zig.deinit(alloc);
+    const cwd: std.Io.Dir = .cwd();
 
     // stack of paths to build.zig.zon files that we need to visit
     var paths: std.ArrayList([]const u8) = .empty;
@@ -82,7 +73,7 @@ pub fn main() !void {
     defer if (flatpak_out) |f| alloc.free(f);
 
     {
-        var it = try std.process.ArgIterator.initWithAllocator(alloc);
+        var it = try init.minimal.args.iterateAllocator(alloc);
         defer it.deinit();
 
         // skip program name
@@ -114,6 +105,11 @@ pub fn main() !void {
                 continue;
             }
 
+            if (std.mem.eql(u8, arg, "--16")) {
+                zig_version = .@"16";
+                continue;
+            }
+
             if (try getParam("--txt", arg, &it)) |param| {
                 txt_out = try alloc.dupe(u8, param);
                 continue;
@@ -134,15 +130,22 @@ pub fn main() !void {
                 continue;
             }
 
-            try paths.append(alloc, try alloc.dupe(u8, arg));
+            var buf: [std.fs.max_path_bytes]u8 = undefined;
+            const len = try cwd.realPathFile(io, arg, &buf);
+            try paths.append(alloc, try alloc.dupe(u8, buf[0..len]));
         }
     }
+
+    try zon2nix.zig.init(alloc, io, .{});
+    defer zon2nix.zig.deinit(alloc);
 
     // if the user didn't supply any paths on the command line, look for
     // build.zig.zon in the current directory
     if (paths.items.len == 0) {
         log.warn("no paths specified on the command line, looking for build.zig.zon in the current directory", .{});
-        try paths.append(alloc, try alloc.dupe(u8, "build.zig.zon"));
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const len = try cwd.realPathFile(io, "build.zig.zon", &buf);
+        try paths.append(alloc, try alloc.dupe(u8, buf[0..len]));
     }
 
     // keep track of paths that we've already processed
@@ -218,7 +221,8 @@ pub fn main() !void {
         try paths_seen.put(alloc, try alloc.dupe(u8, path), true);
 
         log.debug("reading {s}", .{path});
-        var file = std.fs.cwd().openFile(
+        var file = cwd.openFile(
+            io,
             path,
             .{ .mode = .read_only },
         ) catch |err| switch (err) {
@@ -228,10 +232,10 @@ pub fn main() !void {
             },
             else => |e| return e,
         };
-        defer file.close();
+        defer file.close(io);
 
         var buffer: [1024]u8 = undefined;
-        var reader = file.reader(&buffer);
+        var reader = file.reader(io, &buffer);
 
         var build_zig_zon: zon2nix.BuildZigZon = try .init(alloc, &reader.interface);
         defer build_zig_zon.deinit();
@@ -276,7 +280,7 @@ pub fn main() !void {
                 }
 
                 {
-                    const cache_path = try zon2nix.zig.fetch(alloc, url, zig_hash, .{ .zig = options.zig });
+                    const cache_path = try zon2nix.zig.fetch(alloc, io, url, zig_hash, .{ .zig = options.zig });
                     defer alloc.free(cache_path);
 
                     {
@@ -301,6 +305,8 @@ pub fn main() !void {
                 if (nix_out != null or json_out != null or flatpak_out != null) {
                     const nix_hash, const sha256_hash = try zon2nix.nix.fetch(
                         alloc,
+                        io,
+                        init.environ_map,
                         url,
                         .{ .nix_prefetch_git = options.nix_prefetch_git },
                     );
@@ -342,11 +348,12 @@ pub fn main() !void {
             }
 
             if (dep.path) |dep_path| {
-                const dir = try std.fs.cwd().openDir(
+                const dir = try cwd.openDir(
+                    io,
                     std.fs.path.dirname(path) orelse ".",
                     .{},
                 );
-                const full_path = try dir.realpathAlloc(alloc, dep_path);
+                const full_path = try dir.realPathFileAlloc(io, dep_path, alloc);
                 defer alloc.free(full_path);
 
                 const new_path = try std.fs.path.join(
@@ -377,10 +384,11 @@ pub fn main() !void {
 
     if (txt_out) |path| {
         // output a list of URLs
-        var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
-        defer file.close();
+        var file = try cwd.createFile(io, path, .{ .truncate = true });
+        defer file.close(io);
+
         var buffer: [64]u8 = undefined;
-        var writer = file.writer(&buffer);
+        var writer = file.writer(io, &buffer);
 
         std.mem.sort([]const u8, list.items, &urls, sortByMap);
 
@@ -395,44 +403,49 @@ pub fn main() !void {
     if (nix_out) |path| {
         // output a Nix derivation
 
-        const StreamToFile = struct {
-            fn streamer(in: *std.Io.Reader, out: *std.Io.Writer) !void {
-                _ = try in.streamRemaining(out);
-                try out.flush();
-            }
-        };
+        // const StreamToFile = struct {
+        //     fn streamer(in: *std.Io.Reader, out: *std.Io.Writer) !void {
+        //         _ = try in.streamRemaining(out);
+        //         try out.flush();
+        //     }
+        // };
 
         std.mem.sort([]const u8, list.items, &names, sortByMap);
 
-        var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
-        defer file.close();
+        var file = try cwd.createFile(io, path, .{ .truncate = true });
+        defer file.close(io);
+
         var file_buffer: [64]u8 = undefined;
-        var file_writer = file.writer(&file_buffer);
+        var file_writer = file.writer(io, &file_buffer);
 
-        var nixfmt: std.process.Child = .init(&.{options.nixfmt}, alloc);
-        nixfmt.stdin_behavior = .Pipe;
-        nixfmt.stdout_behavior = .Pipe;
-
-        try nixfmt.spawn();
-        errdefer _ = nixfmt.kill() catch {};
+        var nixfmt = try std.process.spawn(
+            io,
+            .{
+                .argv = &.{options.nixfmt},
+                .stdin = .pipe,
+                .stdout = .pipe,
+            },
+        );
+        errdefer nixfmt.kill(io);
 
         const stdin = nixfmt.stdin orelse return error.ExecFailed;
         var stdin_buf: [1024]u8 = undefined;
-        var stdin_writer = stdin.writer(&stdin_buf);
+        var stdin_writer = stdin.writer(io, &stdin_buf);
 
         const stdout = nixfmt.stdout orelse return error.ExecFailed;
         var stdout_buf: [1024]u8 = undefined;
-        var stdout_reader = stdout.reader(&stdout_buf);
+        var stdout_reader = stdout.reader(io, &stdout_buf);
 
-        const stream_to_file = try std.Thread.spawn(
-            .{},
-            StreamToFile.streamer,
+        var stream_to_file = try io.concurrent(
+            zon2nix.streamer,
             .{ &stdout_reader.interface, &file_writer.interface },
         );
+        defer stream_to_file.cancel(io) catch {};
 
         try stdin_writer.interface.writeAll(switch (zig_version) {
             .@"14" => @embedFile("header_0_14.nix"),
             .@"15" => @embedFile("header_0_15.nix"),
+            .@"16" => @embedFile("header_0_15.nix"),
         });
 
         for (list.items) |zig_hash| {
@@ -460,17 +473,20 @@ pub fn main() !void {
 
         try stdin_writer.interface.writeAll("]\n");
         try stdin_writer.interface.flush();
-        stdin.close();
+        stdin.close(io);
+        nixfmt.stdin = null;
 
-        stream_to_file.join();
+        try stream_to_file.await(io);
+
+        _ = try nixfmt.wait(io);
     }
 
     if (json_out) |path| {
         // output a json object
-        var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
-        defer file.close();
+        var file = try cwd.createFile(io, path, .{ .truncate = true });
+        defer file.close(io);
         var buffer: [64]u8 = undefined;
-        var writer = file.writer(&buffer);
+        var writer = file.writer(io, &buffer);
 
         std.mem.sort([]const u8, list.items, &names, sortByMap);
 
@@ -502,10 +518,10 @@ pub fn main() !void {
     }
 
     if (flatpak_out) |path| {
-        var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
-        defer file.close();
+        var file = try cwd.createFile(io, path, .{ .truncate = true });
+        defer file.close(io);
         var buffer: [64]u8 = undefined;
-        var writer = file.writer(&buffer);
+        var writer = file.writer(io, &buffer);
 
         std.mem.sort([]const u8, list.items, &names, sortByMap);
         try writer.interface.writeAll("[\n");

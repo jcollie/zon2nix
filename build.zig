@@ -69,7 +69,7 @@ pub fn build(b: *std.Build) void {
         const mod = b.createModule(
             .{
                 .root_source_file = b.path("src/root.zig"),
-                .target = baseline(target),
+                .target = baseline(b.graph.io, target),
                 .optimize = optimize,
             },
         );
@@ -90,7 +90,7 @@ pub fn build(b: *std.Build) void {
     {
         const mod = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
-            .target = baseline(target),
+            .target = baseline(b.graph.io, target),
             .optimize = optimize,
         });
         const exe = b.addExecutable(.{
@@ -112,12 +112,12 @@ pub fn build(b: *std.Build) void {
     }
 }
 
-fn baseline(target: std.Build.ResolvedTarget) std.Build.ResolvedTarget {
+fn baseline(io: std.Io, target: std.Build.ResolvedTarget) std.Build.ResolvedTarget {
     var query = target.query;
     query.cpu_model = .baseline;
 
     return .{
         .query = query,
-        .result = std.zig.system.resolveTargetQuery(query) catch @panic("unable to resolve baseline query"),
+        .result = std.zig.system.resolveTargetQuery(io, query) catch @panic("unable to resolve baseline query"),
     };
 }
