@@ -73,7 +73,15 @@ pub fn init(allocator: std.mem.Allocator, reader: *std.Io.Reader) !BuildZigZon {
                 .struct_literal => |sl| {
                     for (sl.names, 0..sl.vals.len) |dep_name, dep_index| {
                         const node = sl.vals.at(@intCast(dep_index));
-                        const dep_body = try std.zon.parse.fromZoirNode(BuildZigZon.Dependency, alloc, ast, zoir, node, null, .{});
+                        const dep_body = try std.zon.parse.fromZoirNodeAlloc(
+                            BuildZigZon.Dependency,
+                            alloc,
+                            ast,
+                            zoir,
+                            node,
+                            null,
+                            .{},
+                        );
                         try self.dependencies.put(alloc, try alloc.dupe(u8, dep_name.get(zoir)), dep_body);
                     }
                 },

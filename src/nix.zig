@@ -10,60 +10,55 @@ pub const Options = struct {
 
 const Hashes = std.meta.Tuple(&.{ []const u8, []const u8 });
 
-pub fn fetch(alloc: std.mem.Allocator, url: []const u8, options: Options) !Hashes {
+pub fn fetch(alloc: std.mem.Allocator, io: std.Io, map: *std.process.Environ.Map, url: []const u8, options: Options) !Hashes {
     const u = try std.Uri.parse(url);
 
-    if (std.mem.eql(u8, u.scheme, "git+http")) return try fetchGit(alloc, url, options);
-    if (std.mem.eql(u8, u.scheme, "git+https")) return try fetchGit(alloc, url, options);
+    if (std.mem.eql(u8, u.scheme, "git+http")) return try fetchGit(alloc, io, map, url, options);
+    if (std.mem.eql(u8, u.scheme, "git+https")) return try fetchGit(alloc, io, map, url, options);
 
-    if (std.mem.eql(u8, u.scheme, "http")) return try fetchPlain(alloc, url, options);
-    if (std.mem.eql(u8, u.scheme, "https")) return try fetchPlain(alloc, url, options);
+    if (std.mem.eql(u8, u.scheme, "http")) return try fetchPlain(alloc, io, url, options);
+    if (std.mem.eql(u8, u.scheme, "https")) return try fetchPlain(alloc, io, url, options);
 
     return error.UnsupportedScheme;
 }
 
-fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) !Hashes {
+fn fetchGit(alloc: std.mem.Allocator, io: std.Io, map: *std.process.Environ.Map, url: []const u8, options: Options) !Hashes {
     log.debug("nix fetch git: {s}", .{url});
 
-    var uri = try std.Uri.parse(url);
-    uri.scheme = uri.scheme[4..];
+    const stdout = stdout: {
+        var uri = try std.Uri.parse(url);
+        uri.scheme = uri.scheme[4..];
 
-    const git_url, const git_rev = blk: {
-        if (uri.fragment) |component| {
-            var arena = std.heap.ArenaAllocator.init(alloc);
-            defer arena.deinit();
-            const fragment = try component.toRawMaybeAlloc(arena.allocator());
-            var buf: std.ArrayList(u8) = .empty;
-            var buffer: [64]u8 = undefined;
-            var writer = buf.writer(arena.allocator()).adaptToNewApi(&buffer);
-            try uri.writeToStream(
-                &writer.new_interface,
-                .{
-                    .scheme = true,
-                    .authority = true,
-                    .path = true,
-                },
-            );
-            try writer.new_interface.flush();
-            break :blk .{ try alloc.dupe(u8, buf.items), try alloc.dupe(u8, fragment) };
-        }
-        break :blk .{ try alloc.dupe(u8, url), try alloc.dupe(u8, "HEAD") };
-    };
-    defer alloc.free(git_rev);
-    defer alloc.free(git_url);
+        const git_url, const git_rev = blk: {
+            if (uri.fragment) |component| {
+                var arena: std.heap.ArenaAllocator = .init(alloc);
+                defer arena.deinit();
+                const fragment = try component.toRawMaybeAlloc(arena.allocator());
+                var writer: std.Io.Writer.Allocating = .init(arena.allocator());
+                try uri.writeToStream(
+                    &writer.writer,
+                    .{
+                        .scheme = true,
+                        .authority = true,
+                        .path = true,
+                    },
+                );
+                try writer.writer.flush();
+                break :blk .{ try alloc.dupe(u8, writer.written()), try alloc.dupe(u8, fragment) };
+            }
+            break :blk .{ try alloc.dupe(u8, url), try alloc.dupe(u8, "HEAD") };
+        };
+        defer alloc.free(git_rev);
+        defer alloc.free(git_url);
 
-    var tmpdir: TmpDir = undefined;
-    try tmpdir.init(alloc);
-    defer tmpdir.cleanup(alloc);
+        var tmpdir: TmpDir = undefined;
+        try tmpdir.init(alloc, io);
+        defer tmpdir.cleanup(alloc, io);
 
-    const path = try std.fs.path.join(alloc, &.{ tmpdir.path, "artifact.git" });
-    defer alloc.free(path);
+        const path = try std.fs.path.join(alloc, &.{ tmpdir.path, "artifact.git" });
+        defer alloc.free(path);
 
-    var stdout: std.ArrayList(u8) = .empty;
-    defer stdout.deinit(alloc);
-
-    nix_prefetch_git: {
-        var envmap = try std.process.getEnvMap(alloc);
+        var envmap = try map.clone(alloc);
         defer envmap.deinit();
 
         try envmap.put("TMPDIR", tmpdir.path);
@@ -71,50 +66,55 @@ fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) !Hashes
         try envmap.put("TEMP", tmpdir.path);
         try envmap.put("TEMPDIR", tmpdir.path);
 
-        var stderr: std.ArrayList(u8) = .empty;
-        defer stderr.deinit(alloc);
-
-        var nix_prefetch_git = std.process.Child.init(
-            &.{
-                options.nix_prefetch_git,
-                "--out",
-                path,
-                "--url",
-                git_url,
-                "--rev",
-                git_rev,
-                "--no-deepClone",
-                "--quiet",
+        var nix_prefetch_git = try std.process.spawn(
+            io,
+            .{
+                .argv = &.{
+                    options.nix_prefetch_git,
+                    "--out",
+                    path,
+                    "--url",
+                    git_url,
+                    "--rev",
+                    git_rev,
+                    "--no-deepClone",
+                    "--quiet",
+                },
+                .stdin = .ignore,
+                .stdout = .pipe,
+                .stderr = .ignore,
+                .environ_map = &envmap,
             },
-            alloc,
         );
-        nix_prefetch_git.env_map = &envmap;
-        nix_prefetch_git.stdout_behavior = .Pipe;
-        nix_prefetch_git.stderr_behavior = .Pipe;
-        try nix_prefetch_git.spawn();
-        try nix_prefetch_git.collectOutput(
-            alloc,
-            &stdout,
-            &stderr,
-            std.math.maxInt(u16),
-        );
+        errdefer nix_prefetch_git.kill(io);
 
-        const term = nix_prefetch_git.wait() catch |err| {
-            return err;
-        };
+        var stdout_task = try io.concurrent(collect, .{ alloc, io, nix_prefetch_git.stdout });
+        defer _ = stdout_task.cancel(io) catch {};
 
-        if (stderr.items.len > 0) log.err("{s}", .{stderr.items});
+        var stderr_task = try io.concurrent(collect, .{ alloc, io, nix_prefetch_git.stderr });
+        defer _ = stderr_task.cancel(io) catch {};
+
+        const term = try nix_prefetch_git.wait(io);
+
+        const stdout = try stdout_task.await(io);
+        errdefer alloc.free(stdout);
+
+        const stderr = try stderr_task.await(io);
+        defer alloc.free(stderr);
+
+        if (stderr.len > 0) log.err("{s}", .{stderr});
 
         switch (term) {
-            .Exited => |status| {
-                if (status == 0) break :nix_prefetch_git;
+            .exited => |status| {
+                if (status == 0) break :stdout stdout;
                 return error.NixHashFile;
             },
             else => {
                 return error.NixHashFile;
             },
         }
-    }
+    };
+    defer alloc.free(stdout);
 
     const Output = struct {
         hash: ?[]const u8,
@@ -122,17 +122,17 @@ fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) !Hashes
     const parsed = try std.json.parseFromSlice(
         Output,
         alloc,
-        stdout.items,
+        stdout,
         .{ .ignore_unknown_fields = true },
     );
     defer parsed.deinit();
     if (parsed.value.hash) |hash| {
-        if (!std.mem.startsWith(u8, hash, "sha256-")) return error.UnsupportedNixHash;
+        const h = std.mem.cutPrefix(u8, hash, "sha256-") orelse return error.UnsupportedNixHash;
         const decoder = std.base64.standard.Decoder;
         const Hash = std.crypto.hash.sha2.Sha256;
-        if (try decoder.calcSizeForSlice(hash[7..]) != Hash.digest_length) return error.HashLengthMismatch;
+        if (try decoder.calcSizeForSlice(h) != Hash.digest_length) return error.HashLengthMismatch;
         var final: [Hash.digest_length]u8 = undefined;
-        try decoder.decode(&final, hash[7..]);
+        try decoder.decode(&final, h);
         const hex = std.fmt.bytesToHex(final, .lower);
 
         return .{
@@ -143,13 +143,30 @@ fn fetchGit(alloc: std.mem.Allocator, url: []const u8, options: Options) !Hashes
     return error.HashNotFound;
 }
 
-fn fetchPlain(alloc: std.mem.Allocator, url: []const u8, _: Options) !Hashes {
+fn collect(alloc: std.mem.Allocator, io: std.Io, file_: ?std.Io.File) ![]const u8 {
+    const file = file_ orelse return try alloc.dupe(u8, "");
+
+    var writer: std.Io.Writer.Allocating = .init(alloc);
+    errdefer writer.deinit();
+
+    var buf: [1024]u8 = undefined;
+    var reader = file.reader(io, &buf);
+
+    _ = try reader.interface.streamRemaining(&writer.writer);
+
+    return try writer.toOwnedSlice();
+}
+
+fn fetchPlain(alloc: std.mem.Allocator, io: std.Io, url: []const u8, _: Options) !Hashes {
     log.debug("nix fetch plain: {s}", .{url});
 
     const Hash = std.crypto.hash.sha2.Sha256;
-    var hash = Hash.init(.{});
+    var hash: Hash = .init(.{});
 
-    var client = std.http.Client{ .allocator = alloc };
+    var client = std.http.Client{
+        .allocator = alloc,
+        .io = io,
+    };
     defer client.deinit();
 
     var writer: std.Io.Writer.Allocating = .init(alloc);
