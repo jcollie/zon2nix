@@ -7,18 +7,24 @@ var version: std.SemanticVersion = undefined;
 var global_cache_dir: []const u8 = undefined;
 var root_pkg_dir: []const u8 = undefined;
 
-pub const Options = struct {
-    zig: []const u8 = "zig",
-};
+pub const Options = struct {};
 
-pub fn init(alloc: std.mem.Allocator, io: std.Io, options: Options) !void {
+pub fn init(io: std.Io, alloc: std.mem.Allocator, _: Options) !void {
     const stdout = stdout: {
-        const zig_env = try std.process.run(alloc, io, .{
+        const zig_env = std.process.run(alloc, io, .{
             .argv = &.{
-                options.zig,
+                "zig",
                 "env",
             },
-        });
+        }) catch |err| {
+            switch (err) {
+                error.FileNotFound => {
+                    log.err("unable to execute zig, is it in your PATH?", .{});
+                    return error.GettingZigEnv;
+                },
+                else => |e| return e,
+            }
+        };
         defer {
             alloc.free(zig_env.stdout);
             alloc.free(zig_env.stderr);
@@ -81,7 +87,7 @@ pub fn deinit(alloc: std.mem.Allocator) void {
     alloc.free(root_pkg_dir);
 }
 
-pub fn fetch(alloc: std.mem.Allocator, io: std.Io, url: []const u8, expected_hash: []const u8, options: Options) ![]const u8 {
+pub fn fetch(io: std.Io, alloc: std.mem.Allocator, url: []const u8, expected_hash: []const u8, _: Options) ![]const u8 {
     const cache_path = cache_path: {
         const sixteen = std.SemanticVersion{ .major = 0, .minor = 16, .patch = 0, .pre = "dev" };
         if (version.order(sixteen) == .lt) {
@@ -107,7 +113,7 @@ pub fn fetch(alloc: std.mem.Allocator, io: std.Io, url: []const u8, expected_has
         var zig_fetch = try std.process.spawn(
             io,
             .{
-                .argv = &.{ options.zig, "fetch", url },
+                .argv = &.{ "zig", "fetch", url },
                 .stderr = .ignore,
                 .stdout = .pipe,
                 .stdin = .ignore,

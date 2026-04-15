@@ -32,13 +32,13 @@
             pkgs.nix-prefetch-git
             pkgs.nixfmt
             pkgs.valgrind
-            zig.packages.${pkgs.stdenv.hostPlatform.system}.master
+            zig.packages.${pkgs.stdenv.hostPlatform.system}."0.16.0"
           ];
         };
       });
       packages = forAllSystems (pkgs: {
         zon2nix = pkgs.callPackage ./package.nix {
-          zig = zig.packages.${pkgs.stdenv.hostPlatform.system}.master;
+          zig = zig.packages.${pkgs.stdenv.hostPlatform.system}."0.16.0";
         };
       });
     };

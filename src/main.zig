@@ -136,7 +136,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    try zon2nix.zig.init(alloc, io, .{});
+    try zon2nix.zig.init(io, alloc, .{});
     defer zon2nix.zig.deinit(alloc);
 
     // if the user didn't supply any paths on the command line, look for
@@ -280,7 +280,7 @@ pub fn main(init: std.process.Init) !void {
                 }
 
                 {
-                    const cache_path = try zon2nix.zig.fetch(alloc, io, url, zig_hash, .{ .zig = options.zig });
+                    const cache_path = try zon2nix.zig.fetch(io, alloc, url, zig_hash, .{});
                     defer alloc.free(cache_path);
 
                     {
