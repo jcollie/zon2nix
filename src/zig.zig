@@ -110,30 +110,25 @@ pub fn fetch(io: std.Io, alloc: std.mem.Allocator, url: []const u8, expected_has
 
         log.info("zig fetch {s}", .{url});
 
-        var zig_fetch = try std.process.spawn(
+        const zig_fetch = try std.process.run(
+            alloc,
             io,
             .{
                 .argv = &.{ "zig", "fetch", url },
-                .stderr = .ignore,
-                .stdout = .pipe,
-                .stdin = .ignore,
             },
         );
-        errdefer zig_fetch.kill(io);
-
-        if (zig_fetch.stdout) |stdout_file| {
-            var buffer: [1024]u8 = undefined;
-            var stdout_reader = stdout_file.reader(io, &buffer);
-            const reader = &stdout_reader.interface;
-            _ = try reader.streamRemaining(&stdout.writer);
+        defer {
+            alloc.free(zig_fetch.stdout);
+            alloc.free(zig_fetch.stderr);
         }
 
-        const term = zig_fetch.wait(io) catch |err| {
-            return err;
-        };
-        switch (term) {
+        switch (zig_fetch.term) {
             .exited => |status| {
-                if (status == 0) break :zig_fetch try stdout.toOwnedSlice();
+                if (status == 0) break :zig_fetch try alloc.dupe(u8, zig_fetch.stdout);
+                var it = std.mem.splitScalar(u8, zig_fetch.stderr, '\n');
+                while (it.next()) |line| {
+                    log.err("fetching zig dep: {s}", .{line});
+                }
                 return error.GettingZigDep;
             },
             else => {

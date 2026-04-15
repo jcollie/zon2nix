@@ -43,7 +43,7 @@ fn getParam(name: []const u8, arg: []const u8, it: *std.process.Args.Iterator) !
     return std.mem.cutPrefix(u8, rest, "=") orelse return it.next() orelse return error.MissingPath;
 }
 
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) !u8 {
     const alloc = init.gpa;
     const io = init.io;
 
@@ -304,8 +304,8 @@ pub fn main(init: std.process.Init) !void {
                 // if we're not outputting a nix derivation or json, skip fetching the hash
                 if (nix_out != null or json_out != null or flatpak_out != null) {
                     const nix_hash, const sha256_hash = try zon2nix.nix.fetch(
-                        alloc,
                         io,
+                        alloc,
                         init.environ_map,
                         url,
                         .{ .nix_prefetch_git = options.nix_prefetch_git },
@@ -401,15 +401,6 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (nix_out) |path| {
-        // output a Nix derivation
-
-        // const StreamToFile = struct {
-        //     fn streamer(in: *std.Io.Reader, out: *std.Io.Writer) !void {
-        //         _ = try in.streamRemaining(out);
-        //         try out.flush();
-        //     }
-        // };
-
         std.mem.sort([]const u8, list.items, &names, sortByMap);
 
         var file = try cwd.createFile(io, path, .{ .truncate = true });
@@ -418,14 +409,20 @@ pub fn main(init: std.process.Init) !void {
         var file_buffer: [64]u8 = undefined;
         var file_writer = file.writer(io, &file_buffer);
 
-        var nixfmt = try std.process.spawn(
+        var nixfmt = std.process.spawn(
             io,
             .{
                 .argv = &.{options.nixfmt},
                 .stdin = .pipe,
                 .stdout = .pipe,
             },
-        );
+        ) catch |err| switch (err) {
+            error.FileNotFound => {
+                log.err("unable to execute nixfmt, is it in your PATH?", .{});
+                return 1;
+            },
+            else => |e| return e,
+        };
         errdefer nixfmt.kill(io);
 
         const stdin = nixfmt.stdin orelse return error.ExecFailed;
@@ -589,6 +586,8 @@ pub fn main(init: std.process.Init) !void {
         try writer.interface.writeAll("]\n");
         try writer.interface.flush();
     }
+
+    return 0;
 }
 
 fn sortByKey(_: void, lhs: []const u8, rhs: []const u8) bool {

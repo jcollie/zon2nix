@@ -10,19 +10,19 @@ pub const Options = struct {
 
 const Hashes = std.meta.Tuple(&.{ []const u8, []const u8 });
 
-pub fn fetch(alloc: std.mem.Allocator, io: std.Io, map: *std.process.Environ.Map, url: []const u8, options: Options) !Hashes {
+pub fn fetch(io: std.Io, alloc: std.mem.Allocator, map: *std.process.Environ.Map, url: []const u8, options: Options) !Hashes {
     const u = try std.Uri.parse(url);
 
-    if (std.mem.eql(u8, u.scheme, "git+http")) return try fetchGit(alloc, io, map, url, options);
-    if (std.mem.eql(u8, u.scheme, "git+https")) return try fetchGit(alloc, io, map, url, options);
+    if (std.mem.eql(u8, u.scheme, "git+http")) return try fetchGit(io, alloc, map, url, options);
+    if (std.mem.eql(u8, u.scheme, "git+https")) return try fetchGit(io, alloc, map, url, options);
 
-    if (std.mem.eql(u8, u.scheme, "http")) return try fetchPlain(alloc, io, url, options);
-    if (std.mem.eql(u8, u.scheme, "https")) return try fetchPlain(alloc, io, url, options);
+    if (std.mem.eql(u8, u.scheme, "http")) return try fetchPlain(io, alloc, url, options);
+    if (std.mem.eql(u8, u.scheme, "https")) return try fetchPlain(io, alloc, url, options);
 
     return error.UnsupportedScheme;
 }
 
-fn fetchGit(alloc: std.mem.Allocator, io: std.Io, map: *std.process.Environ.Map, url: []const u8, options: Options) !Hashes {
+fn fetchGit(io: std.Io, alloc: std.mem.Allocator, map: *std.process.Environ.Map, url: []const u8, options: Options) !Hashes {
     log.debug("nix fetch git: {s}", .{url});
 
     const stdout = stdout: {
@@ -66,7 +66,7 @@ fn fetchGit(alloc: std.mem.Allocator, io: std.Io, map: *std.process.Environ.Map,
         try envmap.put("TEMP", tmpdir.path);
         try envmap.put("TEMPDIR", tmpdir.path);
 
-        var nix_prefetch_git = try std.process.spawn(
+        var nix_prefetch_git = std.process.spawn(
             io,
             .{
                 .argv = &.{
@@ -82,16 +82,22 @@ fn fetchGit(alloc: std.mem.Allocator, io: std.Io, map: *std.process.Environ.Map,
                 },
                 .stdin = .ignore,
                 .stdout = .pipe,
-                .stderr = .ignore,
+                .stderr = .pipe,
                 .environ_map = &envmap,
             },
-        );
+        ) catch |err| switch (err) {
+            error.FileNotFound => {
+                log.err("unable to execute nix-prefetch-git, is it in your PATH?", .{});
+                return error.FileNotFound;
+            },
+            else => |e| return e,
+        };
         errdefer nix_prefetch_git.kill(io);
 
-        var stdout_task = try io.concurrent(collect, .{ alloc, io, nix_prefetch_git.stdout });
+        var stdout_task = try io.concurrent(collect, .{ io, alloc, nix_prefetch_git.stdout });
         defer _ = stdout_task.cancel(io) catch {};
 
-        var stderr_task = try io.concurrent(collect, .{ alloc, io, nix_prefetch_git.stderr });
+        var stderr_task = try io.concurrent(collect, .{ io, alloc, nix_prefetch_git.stderr });
         defer _ = stderr_task.cancel(io) catch {};
 
         const term = try nix_prefetch_git.wait(io);
@@ -102,11 +108,13 @@ fn fetchGit(alloc: std.mem.Allocator, io: std.Io, map: *std.process.Environ.Map,
         const stderr = try stderr_task.await(io);
         defer alloc.free(stderr);
 
-        if (stderr.len > 0) log.err("{s}", .{stderr});
-
         switch (term) {
             .exited => |status| {
                 if (status == 0) break :stdout stdout;
+                var it = std.mem.splitScalar(u8, stderr, '\n');
+                while (it.next()) |line| {
+                    log.err("nix-prefetch-git errors: {s}", .{line});
+                }
                 return error.NixHashFile;
             },
             else => {
@@ -143,7 +151,7 @@ fn fetchGit(alloc: std.mem.Allocator, io: std.Io, map: *std.process.Environ.Map,
     return error.HashNotFound;
 }
 
-fn collect(alloc: std.mem.Allocator, io: std.Io, file_: ?std.Io.File) ![]const u8 {
+fn collect(io: std.Io, alloc: std.mem.Allocator, file_: ?std.Io.File) ![]const u8 {
     const file = file_ orelse return try alloc.dupe(u8, "");
 
     var writer: std.Io.Writer.Allocating = .init(alloc);
@@ -157,15 +165,15 @@ fn collect(alloc: std.mem.Allocator, io: std.Io, file_: ?std.Io.File) ![]const u
     return try writer.toOwnedSlice();
 }
 
-fn fetchPlain(alloc: std.mem.Allocator, io: std.Io, url: []const u8, _: Options) !Hashes {
+fn fetchPlain(io: std.Io, alloc: std.mem.Allocator, url: []const u8, _: Options) !Hashes {
     log.debug("nix fetch plain: {s}", .{url});
 
     const Hash = std.crypto.hash.sha2.Sha256;
     var hash: Hash = .init(.{});
 
     var client = std.http.Client{
-        .allocator = alloc,
         .io = io,
+        .allocator = alloc,
     };
     defer client.deinit();
 
