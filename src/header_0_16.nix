@@ -5,7 +5,7 @@
   fetchurl,
   fetchgit,
   runCommandLocal,
-  zig_0_15,
+  zig_0_16,
   name ? "zig-packages",
 }:
 let
@@ -16,11 +16,14 @@ let
     }:
     runCommandLocal name
       {
-        nativeBuildInputs = [ zig_0_15 ];
+        nativeBuildInputs = [ zig_0_16 ];
       }
       ''
-        hash="$(zig fetch --global-cache-dir "$TMPDIR" ${artifact})"
-        mv "$TMPDIR/p/$hash" "$out"
+        # workaround https://codeberg.org/ziglang/zig/issues/31866
+        # https://github.com/Cloudef/zig2nix/issues/54
+        touch "$TMPDIR/build.zig"
+        hash="$(cd "$TMPDIR" && zig fetch --global-cache-dir "$TMPDIR" ${artifact})"
+        mv "$TMPDIR/p/$hash.tar.gz" "$out"
         chmod 755 "$out"
       '';
 

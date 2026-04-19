@@ -136,8 +136,8 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
-    try zon2nix.zig.init(io, alloc, .{});
-    defer zon2nix.zig.deinit(alloc);
+    try zon2nix.zig.init(io, alloc, init.environ_map, .{});
+    defer zon2nix.zig.deinit(io, alloc);
 
     // if the user didn't supply any paths on the command line, look for
     // build.zig.zon in the current directory

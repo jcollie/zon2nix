@@ -10,11 +10,11 @@ pub const Options = struct {
 
 const Hashes = std.meta.Tuple(&.{ []const u8, []const u8 });
 
-pub fn fetch(io: std.Io, alloc: std.mem.Allocator, map: *std.process.Environ.Map, url: []const u8, options: Options) !Hashes {
+pub fn fetch(io: std.Io, alloc: std.mem.Allocator, env_map: *std.process.Environ.Map, url: []const u8, options: Options) !Hashes {
     const u = try std.Uri.parse(url);
 
-    if (std.mem.eql(u8, u.scheme, "git+http")) return try fetchGit(io, alloc, map, url, options);
-    if (std.mem.eql(u8, u.scheme, "git+https")) return try fetchGit(io, alloc, map, url, options);
+    if (std.mem.eql(u8, u.scheme, "git+http")) return try fetchGit(io, alloc, env_map, url, options);
+    if (std.mem.eql(u8, u.scheme, "git+https")) return try fetchGit(io, alloc, env_map, url, options);
 
     if (std.mem.eql(u8, u.scheme, "http")) return try fetchPlain(io, alloc, url, options);
     if (std.mem.eql(u8, u.scheme, "https")) return try fetchPlain(io, alloc, url, options);
@@ -22,7 +22,7 @@ pub fn fetch(io: std.Io, alloc: std.mem.Allocator, map: *std.process.Environ.Map
     return error.UnsupportedScheme;
 }
 
-fn fetchGit(io: std.Io, alloc: std.mem.Allocator, map: *std.process.Environ.Map, url: []const u8, options: Options) !Hashes {
+fn fetchGit(io: std.Io, alloc: std.mem.Allocator, env_map: *std.process.Environ.Map, url: []const u8, options: Options) !Hashes {
     log.debug("nix fetch git: {s}", .{url});
 
     const stdout = stdout: {
@@ -52,13 +52,13 @@ fn fetchGit(io: std.Io, alloc: std.mem.Allocator, map: *std.process.Environ.Map,
         defer alloc.free(git_url);
 
         var tmpdir: TmpDir = undefined;
-        try tmpdir.init(alloc, io);
-        defer tmpdir.cleanup(alloc, io);
+        try tmpdir.init(io, alloc, env_map);
+        defer tmpdir.cleanup(io, alloc);
 
         const path = try std.fs.path.join(alloc, &.{ tmpdir.path, "artifact.git" });
         defer alloc.free(path);
 
-        var envmap = try map.clone(alloc);
+        var envmap = try env_map.clone(alloc);
         defer envmap.deinit();
 
         try envmap.put("TMPDIR", tmpdir.path);

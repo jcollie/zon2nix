@@ -19,7 +19,7 @@ let
         nativeBuildInputs = [ zig_0_15 ];
       }
       ''
-        hash="$(zig fetch --global-cache-dir "$TMPDIR" ${artifact})"
+        hash="$(cd "$TMPDIR" && zig fetch --global-cache-dir "$TMPDIR" ${artifact})"
         mv "$TMPDIR/p/$hash" "$out"
         chmod 755 "$out"
       '';

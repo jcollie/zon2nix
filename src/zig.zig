@@ -2,19 +2,35 @@ const std = @import("std");
 
 const log = std.log.scoped(.zig);
 
+const TmpDir = @import("TmpDir.zig");
+
 var version_string: []const u8 = undefined;
 var version: std.SemanticVersion = undefined;
+var tmpdir: TmpDir = undefined;
 var global_cache_dir: []const u8 = undefined;
 var root_pkg_dir: []const u8 = undefined;
 
 pub const Options = struct {};
 
-pub fn init(io: std.Io, alloc: std.mem.Allocator, _: Options) !void {
+pub fn init(io: std.Io, alloc: std.mem.Allocator, env_map: *std.process.Environ.Map, _: Options) !void {
+    try tmpdir.init(io, alloc, env_map);
+    errdefer tmpdir.cleanup(io, alloc);
+
+    {
+        // workaround https://codeberg.org/ziglang/zig/issues/31866
+        // https://github.com/Cloudef/zig2nix/issues/54
+        const build_zig = try tmpdir.dir.createFile(io, "build.zig", .{});
+        defer build_zig.close(io);
+    }
+
     const stdout = stdout: {
         const zig_env = std.process.run(alloc, io, .{
             .argv = &.{
                 "zig",
                 "env",
+            },
+            .cwd = .{
+                .dir = tmpdir.dir,
             },
         }) catch |err| {
             switch (err) {
@@ -44,7 +60,6 @@ pub fn init(io: std.Io, alloc: std.mem.Allocator, _: Options) !void {
 
     const Env = struct {
         version: ?[]const u8,
-        global_cache_dir: ?[]const u8,
     };
 
     if (std.mem.startsWith(u8, stdout, ".{")) {
@@ -58,7 +73,6 @@ pub fn init(io: std.Io, alloc: std.mem.Allocator, _: Options) !void {
         defer std.zon.parse.free(alloc, parsed);
         version_string = try alloc.dupe(u8, parsed.version orelse return error.GettingZigEnv);
         version = try .parse(version_string);
-        global_cache_dir = try alloc.dupe(u8, parsed.global_cache_dir orelse return error.GettingZigEnv);
     } else {
         const parsed = try std.json.parseFromSlice(
             Env,
@@ -70,21 +84,22 @@ pub fn init(io: std.Io, alloc: std.mem.Allocator, _: Options) !void {
 
         version_string = try alloc.dupe(u8, parsed.value.version orelse return error.GettingZigEnv);
         version = try .parse(version_string);
-        global_cache_dir = try alloc.dupe(u8, parsed.value.global_cache_dir orelse return error.GettingZigEnv);
     }
     errdefer alloc.free(version_string);
-    errdefer alloc.free(global_cache_dir);
 
-    const cwd: std.Io.Dir = .cwd();
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const len = try cwd.realPathFile(io, ".", &buf);
-    root_pkg_dir = try std.fs.path.join(alloc, &.{ buf[0..len], "zig-pkg" });
+    global_cache_dir = try alloc.dupe(u8, tmpdir.path);
+    errdefer alloc.free(global_cache_dir);
+    log.debug("global_cache_dir: {s}", .{global_cache_dir});
+
+    root_pkg_dir = try std.fs.path.join(alloc, &.{ tmpdir.path, "zig-pkg" });
+    log.debug("root_pkg_dir: {s}", .{root_pkg_dir});
 }
 
-pub fn deinit(alloc: std.mem.Allocator) void {
+pub fn deinit(io: std.Io, alloc: std.mem.Allocator) void {
     alloc.free(version_string);
     alloc.free(global_cache_dir);
     alloc.free(root_pkg_dir);
+    tmpdir.cleanup(io, alloc);
 }
 
 pub fn fetch(io: std.Io, alloc: std.mem.Allocator, url: []const u8, expected_hash: []const u8, _: Options) ![]const u8 {
@@ -97,6 +112,7 @@ pub fn fetch(io: std.Io, alloc: std.mem.Allocator, url: []const u8, expected_has
         }
     };
     errdefer alloc.free(cache_path);
+    log.debug("cache_path: {s}", .{cache_path});
 
     // if the cache dir already exists don't download it again
     check: {
@@ -114,7 +130,10 @@ pub fn fetch(io: std.Io, alloc: std.mem.Allocator, url: []const u8, expected_has
             alloc,
             io,
             .{
-                .argv = &.{ "zig", "fetch", url },
+                .argv = &.{ "zig", "fetch", "--global-cache-dir", global_cache_dir, url },
+                .cwd = .{
+                    .dir = tmpdir.dir,
+                },
             },
         );
         defer {
@@ -147,7 +166,6 @@ pub fn fetch(io: std.Io, alloc: std.mem.Allocator, url: []const u8, expected_has
     }
 
     // insurance
-    log.warn("cache_path: {s}", .{cache_path});
     try std.Io.Dir.accessAbsolute(io, cache_path, .{});
 
     return cache_path;
