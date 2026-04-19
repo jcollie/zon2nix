@@ -36,7 +36,7 @@ pub fn init(self: *TmpDir, io: std.Io, alloc: std.mem.Allocator, env_map: *std.p
 
 pub fn cleanup(self: *TmpDir, io: std.Io, alloc: std.mem.Allocator) void {
     self.dir.close(io);
-    // self.tmp.deleteTree(io, self.sub_path) catch {};
+    self.tmp.deleteTree(io, self.sub_path) catch {};
     self.tmp.close(io);
     alloc.free(self.sub_path);
     alloc.free(self.path);
