@@ -1,8 +1,8 @@
 .{
     .name = .zon2nix,
-    .version = "0.3.0",
+    .version = "0.4.0",
     .fingerprint = 0xf85edb58f3e511f2,
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{
         "src",

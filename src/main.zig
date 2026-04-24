@@ -5,7 +5,6 @@ const options = @import("options");
 const zon2nix = @import("zon2nix");
 
 pub const ZigVersion = enum {
-    @"14",
     @"15",
     @"16",
 };
@@ -92,11 +91,6 @@ pub fn main(init: std.process.Init) !u8 {
 
             if (std.mem.eql(u8, arg, "--debug")) {
                 verbose = 4;
-                continue;
-            }
-
-            if (std.mem.eql(u8, arg, "--14")) {
-                zig_version = .@"14";
                 continue;
             }
 
@@ -450,7 +444,6 @@ pub fn main(init: std.process.Init) !u8 {
         defer stream_to_file.cancel(io) catch {};
 
         try stdin_writer.interface.writeAll(switch (zig_version) {
-            .@"14" => @embedFile("header_0_14.nix"),
             .@"15" => @embedFile("header_0_15.nix"),
             .@"16" => @embedFile("header_0_16.nix"),
         });

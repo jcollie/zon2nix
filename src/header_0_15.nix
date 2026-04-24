@@ -2,10 +2,12 @@
 {
   lib,
   linkFarm,
+  fetchzip,
   fetchurl,
   fetchgit,
   runCommandLocal,
   zig_0_15,
+  zstd,
   name ? "zig-packages",
 }:
 let
@@ -29,9 +31,10 @@ let
       name,
       url,
       hash,
+      unpack,
     }:
     let
-      artifact = fetchurl { inherit url hash; };
+      artifact = if unpack then fetchzip { inherit url hash; nativeBuildInputs = [zstd]; } else fetchurl { inherit url hash; };
     in
     unpackZigArtifact { inherit name artifact; };
 
@@ -64,6 +67,7 @@ let
       name,
       url,
       hash,
+      unpack,
     }:
     let
       parts = lib.splitString "://" url;
@@ -79,11 +83,11 @@ let
           url = "https://${path}";
         };
         http = fetchZig {
-          inherit name hash;
+          inherit name hash unpack;
           url = "http://${path}";
         };
         https = fetchZig {
-          inherit name hash;
+          inherit name hash unpack;
           url = "https://${path}";
         };
       };
