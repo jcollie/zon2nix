@@ -23,6 +23,11 @@ pub fn init(io: std.Io, alloc: std.mem.Allocator, env_map: *std.process.Environ.
         defer build_zig.close(io);
     }
 
+    {
+        // workaround https://codeberg.org/ziglang/zig/issues/31964
+        try tmpdir.dir.createDir(io, "tmp", .default_dir);
+    }
+
     const stdout = stdout: {
         const zig_env = std.process.run(alloc, io, .{
             .argv = &.{
