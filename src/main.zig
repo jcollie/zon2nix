@@ -191,12 +191,16 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     // map zig hash -> nix hash
-    var nix_hashes: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    const NixHash = struct {
+        b64: []const u8,
+        unpack: bool,
+    };
+    var nix_hashes: std.StringArrayHashMapUnmanaged(NixHash) = .empty;
     defer {
         var it = nix_hashes.iterator();
         while (it.next()) |entry| {
             alloc.free(entry.key_ptr.*);
-            alloc.free(entry.value_ptr.*);
+            alloc.free(entry.value_ptr.*.b64);
         }
         nix_hashes.deinit(alloc);
     }
@@ -280,14 +284,15 @@ pub fn main(init: std.process.Init) !u8 {
                 }
 
                 {
-                    const cache_path = try zon2nix.zig.fetch(io, alloc, url, zig_hash, .{});
-                    defer alloc.free(cache_path);
+                    const local_path, const global_path = try zon2nix.zig.fetch(io, alloc, url, zig_hash, .{});
+                    defer alloc.free(local_path);
+                    defer alloc.free(global_path);
 
                     {
                         const new_path = try std.fs.path.join(
                             alloc,
                             &.{
-                                cache_path,
+                                local_path,
                                 "build.zig.zon",
                             },
                         );
@@ -303,45 +308,50 @@ pub fn main(init: std.process.Init) !u8 {
 
                 // if we're not outputting a nix derivation or json, skip fetching the hash
                 if (nix_out != null or json_out != null or flatpak_out != null) {
-                    const nix_hash, const sha256_hash = try zon2nix.nix.fetch(
+                    const hashes = try zon2nix.nix.fetch(
                         io,
                         alloc,
                         init.environ_map,
                         url,
-                        .{ .nix_prefetch_git = options.nix_prefetch_git },
+                        zig_hash,
+                        .{
+                            .nix_prefetch_git = options.nix_prefetch_git,
+                            .nix_prefetch_url = options.nix_prefetch_url,
+                        },
                     );
                     defer {
-                        alloc.free(nix_hash);
-                        alloc.free(sha256_hash);
+                        alloc.free(hashes.b64);
+                        alloc.free(hashes.hex);
                     }
-                    log.debug("   nix hash for {s} is {s}", .{ zig_hash, nix_hash });
-                    log.debug("sha256 hash for {s} is {s}", .{ zig_hash, sha256_hash });
+                    log.debug("   nix hash for {s} is {s}", .{ zig_hash, hashes.b64 });
+                    log.debug("sha256 hash for {s} is {s}", .{ zig_hash, hashes.hex });
+                    log.debug("     unpack for {s} is {}", .{ zig_hash, hashes.unpack });
                     if (nix_hashes.get(zig_hash)) |old_nix_hash| {
-                        if (!std.mem.eql(u8, old_nix_hash, nix_hash)) {
+                        if (!std.mem.eql(u8, old_nix_hash.b64, hashes.b64)) {
                             log.err("zig hash {s} resulted in different nix hashes:", .{zig_hash});
-                            log.err("  1st nix hash: {s}", .{old_nix_hash});
-                            log.err("  2nd nix hash: {s}", .{nix_hash});
+                            log.err("  1st nix hash: {s}", .{old_nix_hash.b64});
+                            log.err("  2nd nix hash: {s}", .{hashes.b64});
                             return error.NixHashMismatch;
                         }
                     } else {
                         try nix_hashes.put(
                             alloc,
                             try alloc.dupe(u8, zig_hash),
-                            try alloc.dupe(u8, nix_hash),
+                            .{ .b64 = try alloc.dupe(u8, hashes.b64), .unpack = hashes.unpack },
                         );
                     }
                     if (sha256_hashes.get(zig_hash)) |old_sha256_hash| {
-                        if (!std.mem.eql(u8, old_sha256_hash, sha256_hash)) {
+                        if (!std.mem.eql(u8, old_sha256_hash, hashes.hex)) {
                             log.err("zig hash {s} resulted in different sha256 hashes:", .{zig_hash});
                             log.err("  1st nix hash: {s}", .{old_sha256_hash});
-                            log.err("  2nd nix hash: {s}", .{sha256_hash});
+                            log.err("  2nd nix hash: {s}", .{hashes.hex});
                             return error.Sha256HashMismatch;
                         }
                     } else {
                         try sha256_hashes.put(
                             alloc,
                             try alloc.dupe(u8, zig_hash),
-                            try alloc.dupe(u8, sha256_hash),
+                            try alloc.dupe(u8, hashes.hex),
                         );
                     }
                 }
@@ -457,6 +467,7 @@ pub fn main(init: std.process.Init) !u8 {
                 \\      name = "{[name]s}";
                 \\      url = "{[url]s}";
                 \\      hash = "{[nix_hash]s}";
+                \\      unpack = {[unpack]};
                 \\    }};
                 \\  }}
                 \\
@@ -464,7 +475,8 @@ pub fn main(init: std.process.Init) !u8 {
                 .zig_hash = zig_hash,
                 .name = name,
                 .url = url,
-                .nix_hash = nix_hash,
+                .nix_hash = nix_hash.b64,
+                .unpack = nix_hash.unpack,
             });
         }
 
@@ -505,7 +517,7 @@ pub fn main(init: std.process.Init) !u8 {
                 .zig_hash = zig_hash,
                 .name = name,
                 .url = url,
-                .nix_hash = nix_hash,
+                .nix_hash = nix_hash.b64,
                 .comma = if (index < list.items.len - 1) "," else "",
             });
         }

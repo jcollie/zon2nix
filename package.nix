@@ -1,6 +1,7 @@
 {
   lib,
   stdenvNoCC,
+  nix,
   nix-prefetch-git,
   nixfmt,
   zig,
@@ -15,6 +16,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   ];
   zigBuildFlags = [
     "-Dnix-prefetch-git=${lib.getExe nix-prefetch-git}"
+    "-Dnix-prefetch-url=${lib.getExe' nix "nix-prefetch-url"}"
     "-Dnixfmt=${lib.getExe nixfmt}"
   ];
   meta = {

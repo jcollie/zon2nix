@@ -1,23 +1,37 @@
 const std = @import("std");
 
 const TmpDir = @import("TmpDir.zig");
+const zig = @import("zig.zig");
+const nix32 = @import("nix32.zig");
 
 const log = std.log.scoped(.nix);
 
 pub const Options = struct {
     nix_prefetch_git: []const u8 = "nix-prefetch-git",
+    nix_prefetch_url: []const u8 = "nix-prefetch-url",
 };
 
-const Hashes = std.meta.Tuple(&.{ []const u8, []const u8 });
+const Hashes = struct {
+    b64: []const u8,
+    hex: []const u8,
+    unpack: bool,
+};
 
-pub fn fetch(io: std.Io, alloc: std.mem.Allocator, env_map: *std.process.Environ.Map, url: []const u8, options: Options) !Hashes {
+pub fn fetch(
+    io: std.Io,
+    alloc: std.mem.Allocator,
+    env_map: *std.process.Environ.Map,
+    url: []const u8,
+    expected_hash: []const u8,
+    options: Options,
+) !Hashes {
     const u = try std.Uri.parse(url);
 
     if (std.mem.eql(u8, u.scheme, "git+http")) return try fetchGit(io, alloc, env_map, url, options);
     if (std.mem.eql(u8, u.scheme, "git+https")) return try fetchGit(io, alloc, env_map, url, options);
 
-    if (std.mem.eql(u8, u.scheme, "http")) return try fetchPlain(io, alloc, url, options);
-    if (std.mem.eql(u8, u.scheme, "https")) return try fetchPlain(io, alloc, url, options);
+    if (std.mem.eql(u8, u.scheme, "http")) return try fetchPlain(io, alloc, env_map, url, expected_hash, options);
+    if (std.mem.eql(u8, u.scheme, "https")) return try fetchPlain(io, alloc, env_map, url, expected_hash, options);
 
     return error.UnsupportedScheme;
 }
@@ -144,8 +158,9 @@ fn fetchGit(io: std.Io, alloc: std.mem.Allocator, env_map: *std.process.Environ.
         const hex = std.fmt.bytesToHex(final, .lower);
 
         return .{
-            try alloc.dupe(u8, hash),
-            try alloc.dupe(u8, &hex),
+            .b64 = try alloc.dupe(u8, hash),
+            .hex = try alloc.dupe(u8, &hex),
+            .unpack = true,
         };
     }
     return error.HashNotFound;
@@ -165,43 +180,105 @@ fn collect(io: std.Io, alloc: std.mem.Allocator, file_: ?std.Io.File) ![]const u
     return try writer.toOwnedSlice();
 }
 
-fn fetchPlain(io: std.Io, alloc: std.mem.Allocator, url: []const u8, _: Options) !Hashes {
+fn fetchPlain(io: std.Io, alloc: std.mem.Allocator, env_map: *std.process.Environ.Map, url: []const u8, expected_hash: []const u8, options: Options) !Hashes {
     log.debug("nix fetch plain: {s}", .{url});
 
-    const Hash = std.crypto.hash.sha2.Sha256;
-    var hash: Hash = .init(.{});
+    const unpack = !std.mem.startsWith(u8, expected_hash, "N-V-");
 
-    var client = std.http.Client{
-        .io = io,
-        .allocator = alloc,
+    const stdout = stdout: {
+        var tmpdir: TmpDir = undefined;
+        try tmpdir.init(io, alloc, env_map);
+        defer tmpdir.cleanup(io, alloc);
+
+        var envmap = try env_map.clone(alloc);
+        defer envmap.deinit();
+
+        try envmap.put("TMPDIR", tmpdir.path);
+        try envmap.put("TMP", tmpdir.path);
+        try envmap.put("TEMP", tmpdir.path);
+        try envmap.put("TEMPDIR", tmpdir.path);
+
+        var nix_prefetch_url = std.process.spawn(
+            io,
+            .{
+                .argv = if (unpack)
+                    &.{
+                        options.nix_prefetch_url,
+                        "--type",
+                        "sha256",
+                        "--unpack",
+                        url,
+                    }
+                else
+                    &.{
+                        options.nix_prefetch_url,
+                        "--type",
+                        "sha256",
+                        url,
+                    },
+                .stdin = .ignore,
+                .stdout = .pipe,
+                .stderr = .pipe,
+                .environ_map = &envmap,
+            },
+        ) catch |err| switch (err) {
+            error.FileNotFound => {
+                log.err("unable to execute nix-prefetch-url, is it in your PATH?", .{});
+                return error.FileNotFound;
+            },
+            else => |e| return e,
+        };
+        errdefer nix_prefetch_url.kill(io);
+
+        var stdout_task = try io.concurrent(collect, .{ io, alloc, nix_prefetch_url.stdout });
+        defer _ = stdout_task.cancel(io) catch {};
+
+        var stderr_task = try io.concurrent(collect, .{ io, alloc, nix_prefetch_url.stderr });
+        defer _ = stderr_task.cancel(io) catch {};
+
+        const term = try nix_prefetch_url.wait(io);
+
+        const stdout = try stdout_task.await(io);
+        errdefer alloc.free(stdout);
+
+        const stderr = try stderr_task.await(io);
+        defer alloc.free(stderr);
+
+        switch (term) {
+            .exited => |status| {
+                if (status == 0) break :stdout stdout;
+                var it = std.mem.splitScalar(u8, stderr, '\n');
+                while (it.next()) |line| {
+                    log.err("nix-prefetch-url errors: {s}", .{line});
+                }
+                return error.NixHashFile;
+            },
+            else => {
+                return error.NixHashFile;
+            },
+        }
     };
-    defer client.deinit();
+    defer alloc.free(stdout);
 
-    var writer: std.Io.Writer.Allocating = .init(alloc);
-    defer writer.deinit();
+    const encoded = std.mem.trim(u8, stdout, &std.ascii.whitespace);
 
-    const status = status: {
-        const uri = try std.Uri.parse(url);
-        const result = try client.fetch(.{
-            .method = .GET,
-            .location = .{ .uri = uri },
-            .response_writer = &writer.writer,
-        });
-        break :status result.status;
-    };
+    var hex_buf: [128]u8 = undefined;
+    const raw = try nix32.decode(&hex_buf, encoded);
 
-    if (status != .ok) return error.BadHttpStatus;
+    const hex = try std.fmt.allocPrint(alloc, "{x}", .{raw});
+    errdefer alloc.free(hex);
 
-    try writer.writer.flush();
-
-    hash.update(writer.written());
-
-    var final: [Hash.digest_length]u8 = undefined;
-    hash.final(&final);
-    const hex = std.fmt.bytesToHex(final, .lower);
+    const hash = try std.fmt.allocPrint(alloc, "sha256-{b64}", .{raw});
+    errdefer alloc.free(hash);
 
     return .{
-        try std.fmt.allocPrint(alloc, "sha256-{b64}", .{final}),
-        try alloc.dupe(u8, &hex),
+        .b64 = hash,
+        .hex = hex,
+        .unpack = unpack,
     };
+}
+
+test {
+    _ = nix32;
+    std.testing.refAllDecls(@This());
 }

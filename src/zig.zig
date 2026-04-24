@@ -102,22 +102,39 @@ pub fn deinit(io: std.Io, alloc: std.mem.Allocator) void {
     tmpdir.cleanup(io, alloc);
 }
 
-pub fn fetch(io: std.Io, alloc: std.mem.Allocator, url: []const u8, expected_hash: []const u8, _: Options) ![]const u8 {
-    const cache_path = cache_path: {
-        const sixteen = std.SemanticVersion{ .major = 0, .minor = 16, .patch = 0, .pre = "dev" };
-        if (version.order(sixteen) == .lt) {
-            break :cache_path try std.fs.path.join(alloc, &.{ global_cache_dir, "p", expected_hash });
+const sixteen = std.SemanticVersion{ .major = 0, .minor = 16, .patch = 0, .pre = "dev" };
+
+pub fn isSixteen() bool {
+    return version.order(sixteen) != .lt;
+}
+
+const Paths = std.meta.Tuple(&.{ []const u8, []const u8 });
+pub fn fetch(io: std.Io, alloc: std.mem.Allocator, url: []const u8, expected_hash: []const u8, _: Options) !Paths {
+    const local_path, const global_path = paths: {
+        if (isSixteen()) {
+            const global_filename = try std.fmt.allocPrint(alloc, "{s}.tar.gz", .{expected_hash});
+            defer alloc.free(global_filename);
+            break :paths .{
+                try std.fs.path.join(alloc, &.{ root_pkg_dir, expected_hash }),
+                try std.fs.path.join(alloc, &.{ global_cache_dir, "p", global_filename }),
+            };
         } else {
-            break :cache_path try std.fs.path.join(alloc, &.{ root_pkg_dir, expected_hash });
+            break :paths .{
+                try std.fs.path.join(alloc, &.{ global_cache_dir, "p", expected_hash }),
+                try std.fs.path.join(alloc, &.{ global_cache_dir, "p", expected_hash }),
+            };
         }
     };
-    errdefer alloc.free(cache_path);
-    log.debug("cache_path: {s}", .{cache_path});
+    errdefer alloc.free(local_path);
+    errdefer alloc.free(global_path);
+    log.debug("local_path: {s}", .{local_path});
+    log.debug("global_path: {s}", .{global_path});
 
     // if the cache dir already exists don't download it again
     check: {
-        std.Io.Dir.accessAbsolute(io, cache_path, .{}) catch break :check;
-        return cache_path;
+        std.Io.Dir.accessAbsolute(io, local_path, .{}) catch break :check;
+        std.Io.Dir.accessAbsolute(io, global_path, .{}) catch break :check;
+        return .{ local_path, global_path };
     }
 
     const stdout = zig_fetch: {
@@ -166,7 +183,8 @@ pub fn fetch(io: std.Io, alloc: std.mem.Allocator, url: []const u8, expected_has
     }
 
     // insurance
-    try std.Io.Dir.accessAbsolute(io, cache_path, .{});
+    try std.Io.Dir.accessAbsolute(io, local_path, .{});
+    try std.Io.Dir.accessAbsolute(io, global_path, .{});
 
-    return cache_path;
+    return .{ local_path, global_path };
 }

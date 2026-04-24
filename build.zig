@@ -5,10 +5,12 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const nix_prefetch_git = b.option([]const u8, "nix-prefetch-git", "Path to nix-prefetch-git") orelse "nix-prefetch-git";
+    const nix_prefetch_url = b.option([]const u8, "nix-prefetch-url", "Path to nix-prefetch-url") orelse "nix-prefetch-url";
     const nixfmt = b.option([]const u8, "nixfmt", "Path to nixfmt") orelse "nixfmt";
 
     const options = b.addOptions();
     options.addOption([]const u8, "nix_prefetch_git", nix_prefetch_git);
+    options.addOption([]const u8, "nix_prefetch_url", nix_prefetch_url);
     options.addOption([]const u8, "nixfmt", nixfmt);
 
     const root_mod = b.addModule(
@@ -74,6 +76,7 @@ pub fn build(b: *std.Build) void {
         const exe = b.addTest(.{
             .root_module = mod,
         });
+        test_step.dependOn(&exe.step);
 
         const run = b.addSystemCommand(&.{
             "valgrind",
