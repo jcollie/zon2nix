@@ -24,6 +24,8 @@ let
         # workaround https://codeberg.org/ziglang/zig/issues/31866
         # https://github.com/Cloudef/zig2nix/issues/54
         touch "$TMPDIR/build.zig"
+        # workaround https://codeberg.org/ziglang/zig/issues/31964
+        mkdir "$TMPDIR/tmp"
         hash="$(cd "$TMPDIR" && zig fetch --global-cache-dir "$TMPDIR" ${artifact})"
         mv "$TMPDIR/p/$hash.tar.gz" "$out"
         chmod 755 "$out"
