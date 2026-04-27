@@ -130,9 +130,6 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
-    try zon2nix.zig.init(io, alloc, init.environ_map, .{});
-    defer zon2nix.zig.deinit(io, alloc);
-
     // if the user didn't supply any paths on the command line, look for
     // build.zig.zon in the current directory
     if (paths.items.len == 0) {
@@ -142,6 +139,10 @@ pub fn main(init: std.process.Init) !u8 {
         try paths.append(alloc, try alloc.dupe(u8, buf[0..len]));
     }
 
+    var deps: zon2nix.Deps = undefined;
+    try deps.init(io, alloc, init.environ_map);
+    defer deps.deinit(io, alloc);
+
     // keep track of paths that we've already processed
     var paths_seen: std.StringArrayHashMapUnmanaged(bool) = .empty;
     defer {
@@ -150,64 +151,6 @@ pub fn main(init: std.process.Init) !u8 {
             alloc.free(entry.key_ptr.*);
         }
         paths_seen.deinit(alloc);
-    }
-
-    // keep track of URLs that we've already visited
-    var urls_seen: std.StringArrayHashMapUnmanaged(bool) = .empty;
-    defer {
-        var it = urls_seen.iterator();
-        while (it.next()) |entry| {
-            alloc.free(entry.key_ptr.*);
-        }
-        urls_seen.deinit(alloc);
-    }
-
-    // map zig hash -> URL
-    var urls: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    defer {
-        var it = urls.iterator();
-        while (it.next()) |entry| {
-            alloc.free(entry.key_ptr.*);
-            alloc.free(entry.value_ptr.*);
-        }
-        urls.deinit(alloc);
-    }
-
-    // map zig hash -> dependency name
-    var names: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    defer {
-        var it = names.iterator();
-        while (it.next()) |entry| {
-            alloc.free(entry.key_ptr.*);
-            alloc.free(entry.value_ptr.*);
-        }
-        names.deinit(alloc);
-    }
-
-    // map zig hash -> nix hash
-    const NixHash = struct {
-        b64: []const u8,
-        unpack: bool,
-    };
-    var nix_hashes: std.StringArrayHashMapUnmanaged(NixHash) = .empty;
-    defer {
-        var it = nix_hashes.iterator();
-        while (it.next()) |entry| {
-            alloc.free(entry.key_ptr.*);
-            alloc.free(entry.value_ptr.*.b64);
-        }
-        nix_hashes.deinit(alloc);
-    }
-
-    // map zig hash -> sha256 hash
-    var sha256_hashes: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-    defer {
-        var it = sha256_hashes.iterator();
-        while (it.next()) |entry| {
-            alloc.free(entry.key_ptr.*);
-            alloc.free(entry.value_ptr.*);
-        }
-        sha256_hashes.deinit(alloc);
     }
 
     // loop through all the paths
@@ -241,117 +184,42 @@ pub fn main(init: std.process.Init) !u8 {
         var it = build_zig_zon.dependencies.iterator();
         while (it.next()) |entry| {
             const name = entry.key_ptr.*;
-            const dep = entry.value_ptr;
+            const zon_dep = entry.value_ptr;
 
-            if (dep.url) |url| {
-                if (urls_seen.contains(url)) continue;
-                try urls_seen.put(alloc, try alloc.dupe(u8, url), true);
-
-                const uri = try std.Uri.parse(url);
-                if (std.mem.eql(u8, uri.scheme, "file")) {
-                    log.err("file:// urls are not supported: {s} {s}", .{ name, url });
-                    continue;
-                }
-
-                const zig_hash = dep.hash orelse {
+            if (zon_dep.url) |url| {
+                const zig_hash = zon_dep.hash orelse {
                     log.err("hash is missing from {s} in {s}", .{ name, path });
                     continue;
                 };
 
-                if (urls.get(zig_hash)) |old_url| {
-                    if (!std.mem.eql(u8, old_url, url)) {
-                        log.warn("zig hash {s} downloaded from multiple urls:", .{zig_hash});
-                        log.warn("  1st url: {s}", .{old_url});
-                        log.warn("  2nd url: {s}", .{url});
-                    }
-                } else {
-                    try urls.put(alloc, try alloc.dupe(u8, zig_hash), try alloc.dupe(u8, url));
-                }
-                if (names.get(zig_hash)) |old_name| {
-                    if (!std.mem.eql(u8, old_name, name)) {
-                        log.warn("zig hash {s} referenced by multiple names:", .{zig_hash});
-                        log.warn("  1st name: {s}", .{old_name});
-                        log.warn("  2nd name: {s}", .{name});
-                    }
-                } else {
-                    try names.put(alloc, try alloc.dupe(u8, zig_hash), try alloc.dupe(u8, name));
-                }
+                const dep = try deps.get(io, alloc, name, url, zig_hash);
+                build_zig_zon: {
+                    const new_path = try dep.getBuildZigZon(io, alloc, &deps.zig, &deps.tmpdir) orelse break :build_zig_zon;
+                    errdefer alloc.free(new_path);
 
-                {
-                    const local_path, const global_path = try zon2nix.zig.fetch(io, alloc, url, zig_hash, .{});
-                    defer alloc.free(local_path);
-                    defer alloc.free(global_path);
-
-                    {
-                        const new_path = try std.fs.path.join(
-                            alloc,
-                            &.{
-                                local_path,
-                                "build.zig.zon",
-                            },
-                        );
-                        errdefer alloc.free(new_path);
-
-                        log.debug("adding to paths: {s}", .{new_path});
-                        try paths.append(
-                            alloc,
-                            new_path,
-                        );
-                    }
+                    log.debug("adding to paths: {s}", .{new_path});
+                    try paths.append(
+                        alloc,
+                        new_path,
+                    );
                 }
 
                 // if we're not outputting a nix derivation or json, skip fetching the hash
                 if (nix_out != null or json_out != null or flatpak_out != null) {
-                    const hashes = try zon2nix.nix.fetch(
+                    try dep.getNixHashes(
                         io,
                         alloc,
                         init.environ_map,
-                        url,
-                        zig_hash,
+                        &deps.tmpdir,
                         .{
                             .nix_prefetch_git = options.nix_prefetch_git,
                             .nix_prefetch_url = options.nix_prefetch_url,
                         },
                     );
-                    defer {
-                        alloc.free(hashes.b64);
-                        alloc.free(hashes.hex);
-                    }
-                    log.debug("   nix hash for {s} is {s}", .{ zig_hash, hashes.b64 });
-                    log.debug("sha256 hash for {s} is {s}", .{ zig_hash, hashes.hex });
-                    log.debug("     unpack for {s} is {}", .{ zig_hash, hashes.unpack });
-                    if (nix_hashes.get(zig_hash)) |old_nix_hash| {
-                        if (!std.mem.eql(u8, old_nix_hash.b64, hashes.b64)) {
-                            log.err("zig hash {s} resulted in different nix hashes:", .{zig_hash});
-                            log.err("  1st nix hash: {s}", .{old_nix_hash.b64});
-                            log.err("  2nd nix hash: {s}", .{hashes.b64});
-                            return error.NixHashMismatch;
-                        }
-                    } else {
-                        try nix_hashes.put(
-                            alloc,
-                            try alloc.dupe(u8, zig_hash),
-                            .{ .b64 = try alloc.dupe(u8, hashes.b64), .unpack = hashes.unpack },
-                        );
-                    }
-                    if (sha256_hashes.get(zig_hash)) |old_sha256_hash| {
-                        if (!std.mem.eql(u8, old_sha256_hash, hashes.hex)) {
-                            log.err("zig hash {s} resulted in different sha256 hashes:", .{zig_hash});
-                            log.err("  1st nix hash: {s}", .{old_sha256_hash});
-                            log.err("  2nd nix hash: {s}", .{hashes.hex});
-                            return error.Sha256HashMismatch;
-                        }
-                    } else {
-                        try sha256_hashes.put(
-                            alloc,
-                            try alloc.dupe(u8, zig_hash),
-                            try alloc.dupe(u8, hashes.hex),
-                        );
-                    }
                 }
             }
 
-            if (dep.path) |dep_path| {
+            if (zon_dep.path) |dep_path| {
                 const dir = try cwd.openDir(
                     io,
                     std.fs.path.dirname(path) orelse ".",
@@ -376,42 +244,42 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
-    var list: std.ArrayList([]const u8) = .empty;
+    var list: std.ArrayList(*zon2nix.Dep) = .empty;
     // don't deallocate the actual entries as they will be
     // deallocated with the hash maps
     defer list.deinit(alloc);
 
-    var it = urls.iterator();
+    var it = deps.iterator();
     while (it.next()) |entry| {
-        try list.append(alloc, entry.key_ptr.*);
+        try list.append(alloc, entry);
     }
 
     if (txt_out) |path| {
+        std.mem.sort(*zon2nix.Dep, list.items, {}, sortByUrl);
+
         // output a list of URLs
-        var file = try cwd.createFile(io, path, .{ .truncate = true });
-        defer file.close(io);
+        var file = try cwd.createFileAtomic(io, path, .{ .replace = true });
+        defer file.deinit(io);
 
         var buffer: [64]u8 = undefined;
-        var writer = file.writer(io, &buffer);
+        var writer = file.file.writer(io, &buffer);
 
-        std.mem.sort([]const u8, list.items, &urls, sortByMap);
-
-        for (list.items) |zig_hash| {
-            const url = urls.get(zig_hash) orelse unreachable;
-            try writer.interface.print("{s}\n", .{url});
+        for (list.items) |dep| {
+            try writer.interface.print("{s}\n", .{dep.getUrl()});
         }
 
         try writer.interface.flush();
+        try file.replace(io);
     }
 
     if (nix_out) |path| {
-        std.mem.sort([]const u8, list.items, &names, sortByMap);
+        std.mem.sort(*zon2nix.Dep, list.items, {}, sortByName);
 
-        var file = try cwd.createFile(io, path, .{ .truncate = true });
-        defer file.close(io);
+        var file = try cwd.createFileAtomic(io, path, .{ .replace = true });
+        defer file.deinit(io);
 
         var file_buffer: [64]u8 = undefined;
-        var file_writer = file.writer(io, &file_buffer);
+        var file_writer = file.file.writer(io, &file_buffer);
 
         var nixfmt = std.process.spawn(
             io,
@@ -448,10 +316,8 @@ pub fn main(init: std.process.Init) !u8 {
             .@"16" => @embedFile("header_0_16.nix"),
         });
 
-        for (list.items) |zig_hash| {
-            const name = names.get(zig_hash) orelse return error.MissingName;
-            const url = urls.get(zig_hash) orelse return error.MissingUrl;
-            const nix_hash = nix_hashes.get(zig_hash) orelse return error.MissingNixHash;
+        for (list.items) |dep| {
+            const nix = dep.nix orelse return error.MissingNixHash;
 
             try stdin_writer.interface.print(
                 \\  {{
@@ -465,11 +331,11 @@ pub fn main(init: std.process.Init) !u8 {
                 \\  }}
                 \\
             , .{
-                .zig_hash = zig_hash,
-                .name = name,
-                .url = url,
-                .nix_hash = nix_hash.b64,
-                .unpack = nix_hash.unpack,
+                .zig_hash = dep.zig_hash,
+                .name = dep.getName(),
+                .url = dep.getUrl(),
+                .nix_hash = nix.b64,
+                .unpack = nix.unpack,
             });
         }
 
@@ -481,23 +347,24 @@ pub fn main(init: std.process.Init) !u8 {
         try stream_to_file.await(io);
 
         _ = try nixfmt.wait(io);
+
+        try file.replace(io);
     }
 
     if (json_out) |path| {
         // output a json object
-        var file = try cwd.createFile(io, path, .{ .truncate = true });
-        defer file.close(io);
-        var buffer: [64]u8 = undefined;
-        var writer = file.writer(io, &buffer);
+        var file = try cwd.createFileAtomic(io, path, .{ .replace = true });
+        defer file.deinit(io);
 
-        std.mem.sort([]const u8, list.items, &names, sortByMap);
+        var buffer: [64]u8 = undefined;
+        var writer = file.file.writer(io, &buffer);
+
+        std.mem.sort(*zon2nix.Dep, list.items, {}, sortByName);
 
         try writer.interface.writeAll("{\n");
 
-        for (list.items, 0..) |zig_hash, index| {
-            const name = names.get(zig_hash) orelse return error.MissingName;
-            const url = urls.get(zig_hash) orelse return error.MissingUrl;
-            const nix_hash = nix_hashes.get(zig_hash) orelse return error.MissingNixHash;
+        for (list.items, 0..) |dep, index| {
+            const nix = dep.nix orelse return error.MissingNixHash;
 
             try writer.interface.print(
                 \\  "{[zig_hash]s}": {{
@@ -507,32 +374,36 @@ pub fn main(init: std.process.Init) !u8 {
                 \\  }}{[comma]s}
                 \\
             , .{
-                .zig_hash = zig_hash,
-                .name = name,
-                .url = url,
-                .nix_hash = nix_hash.b64,
+                .zig_hash = dep.zig_hash,
+                .name = dep.getName(),
+                .url = dep.getUrl(),
+                .nix_hash = nix.b64,
                 .comma = if (index < list.items.len - 1) "," else "",
             });
         }
 
         try writer.interface.writeAll("}\n");
         try writer.interface.flush();
+
+        try file.replace(io);
     }
 
     if (flatpak_out) |path| {
+        std.mem.sort(*zon2nix.Dep, list.items, {}, sortByName);
+
         var file = try cwd.createFile(io, path, .{ .truncate = true });
         defer file.close(io);
         var buffer: [64]u8 = undefined;
         var writer = file.writer(io, &buffer);
 
-        std.mem.sort([]const u8, list.items, &names, sortByMap);
         try writer.interface.writeAll("[\n");
 
-        for (list.items, 0..) |zig_hash, index| {
-            const url = urls.get(zig_hash) orelse return error.MissingUrl;
-            const sha256_hash = sha256_hashes.get(zig_hash) orelse return error.MissingSha256Hash;
+        for (list.items, 0..) |dep, index| {
+            const url = dep.getUrl();
 
             if (!std.mem.startsWith(u8, url, "git+")) {
+                const local = dep.local orelse return error.MissingSHA256;
+
                 try writer.interface.print(
                     \\  {{
                     \\    "type": "archive",
@@ -542,9 +413,9 @@ pub fn main(init: std.process.Init) !u8 {
                     \\  }}{[comma]s}
                     \\
                 , .{
-                    .zig_hash = zig_hash,
+                    .zig_hash = dep.zig_hash,
                     .url = url,
-                    .sha256_hash = sha256_hash,
+                    .sha256_hash = local.sha256,
                     .comma = if (index < list.items.len - 1) "," else "",
                 });
             } else {
@@ -580,7 +451,7 @@ pub fn main(init: std.process.Init) !u8 {
                     \\  }}{[comma]s}
                     \\
                 , .{
-                    .zig_hash = zig_hash,
+                    .zig_hash = dep.zig_hash,
                     .url = new_url,
                     .commit = commit,
                     .comma = if (index < list.items.len - 1) "," else "",
@@ -595,12 +466,25 @@ pub fn main(init: std.process.Init) !u8 {
     return 0;
 }
 
-fn sortByKey(_: void, lhs: []const u8, rhs: []const u8) bool {
-    return std.mem.lessThan(u8, lhs, rhs);
+// fn sortByKey(_: void, lhs: []const u8, rhs: []const u8) bool {
+//     return std.mem.lessThan(u8, lhs, rhs);
+// }
+
+fn sortByZigHash(_: void, lhs: *zon2nix.Dep, rhs: *zon2nix.Dep) bool {
+    const a = lhs.zig_hash;
+    const b = rhs.zig_hash;
+    return std.mem.lessThan(u8, a, b);
 }
 
-fn sortByMap(map: *const std.StringArrayHashMapUnmanaged([]const u8), lhs: []const u8, rhs: []const u8) bool {
-    const a = map.get(lhs) orelse unreachable;
-    const b = map.get(rhs) orelse unreachable;
+fn sortByName(_: void, lhs: *zon2nix.Dep, rhs: *zon2nix.Dep) bool {
+    if (std.mem.eql(u8, lhs.getName(), rhs.getName())) {
+        return std.mem.lessThan(u8, lhs.getUrl(), rhs.getUrl());
+    }
+    return std.mem.lessThan(u8, lhs.getName(), rhs.getName());
+}
+
+fn sortByUrl(_: void, lhs: *zon2nix.Dep, rhs: *zon2nix.Dep) bool {
+    const a = lhs.getUrl();
+    const b = rhs.getUrl();
     return std.mem.lessThan(u8, a, b);
 }

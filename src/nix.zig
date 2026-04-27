@@ -1,8 +1,9 @@
 const std = @import("std");
 
 const TmpDir = @import("TmpDir.zig");
-const zig = @import("zig.zig");
+// const zig = @import("zig.zig");
 const nix32 = @import("nix32.zig");
+const Style = @import("root.zig").Style;
 
 const log = std.log.scoped(.nix);
 
@@ -20,23 +21,32 @@ const Hashes = struct {
 pub fn fetch(
     io: std.Io,
     alloc: std.mem.Allocator,
+    tmpdir: *TmpDir,
     env_map: *std.process.Environ.Map,
+    path: ?[]const u8,
     url: []const u8,
     expected_hash: []const u8,
     options: Options,
 ) !Hashes {
     const u = try std.Uri.parse(url);
 
-    if (std.mem.eql(u8, u.scheme, "git+http")) return try fetchGit(io, alloc, env_map, url, options);
-    if (std.mem.eql(u8, u.scheme, "git+https")) return try fetchGit(io, alloc, env_map, url, options);
+    const style: Style = .init(u.scheme);
 
-    if (std.mem.eql(u8, u.scheme, "http")) return try fetchPlain(io, alloc, env_map, url, expected_hash, options);
-    if (std.mem.eql(u8, u.scheme, "https")) return try fetchPlain(io, alloc, env_map, url, expected_hash, options);
-
-    return error.UnsupportedScheme;
+    return switch (style) {
+        .git => try fetchGit(io, alloc, tmpdir, env_map, url, options),
+        .http, .file => try fetchPlain(io, alloc, tmpdir, env_map, path, url, expected_hash, options),
+        .other => return error.UnsupportedScheme,
+    };
 }
 
-fn fetchGit(io: std.Io, alloc: std.mem.Allocator, env_map: *std.process.Environ.Map, url: []const u8, options: Options) !Hashes {
+fn fetchGit(
+    io: std.Io,
+    alloc: std.mem.Allocator,
+    tmpdir: *TmpDir,
+    env_map: *std.process.Environ.Map,
+    url: []const u8,
+    options: Options,
+) !Hashes {
     log.debug("nix fetch git: {s}", .{url});
 
     const stdout = stdout: {
@@ -65,20 +75,19 @@ fn fetchGit(io: std.Io, alloc: std.mem.Allocator, env_map: *std.process.Environ.
         defer alloc.free(git_rev);
         defer alloc.free(git_url);
 
-        var tmpdir: TmpDir = undefined;
-        try tmpdir.init(io, alloc, env_map);
-        defer tmpdir.cleanup(io, alloc);
+        const subdir = try tmpdir.randomSubdir(io, alloc);
+        defer subdir.deinit(io, alloc);
 
-        const path = try std.fs.path.join(alloc, &.{ tmpdir.path, "artifact.git" });
+        const path = try std.fs.path.join(alloc, &.{ subdir.path, "artifact.git" });
         defer alloc.free(path);
 
         var envmap = try env_map.clone(alloc);
         defer envmap.deinit();
 
-        try envmap.put("TMPDIR", tmpdir.path);
-        try envmap.put("TMP", tmpdir.path);
-        try envmap.put("TEMP", tmpdir.path);
-        try envmap.put("TEMPDIR", tmpdir.path);
+        try envmap.put("TMPDIR", subdir.path);
+        try envmap.put("TMP", subdir.path);
+        try envmap.put("TEMP", subdir.path);
+        try envmap.put("TEMPDIR", subdir.path);
 
         var nix_prefetch_git = std.process.spawn(
             io,
@@ -180,23 +189,48 @@ fn collect(io: std.Io, alloc: std.mem.Allocator, file_: ?std.Io.File) ![]const u
     return try writer.toOwnedSlice();
 }
 
-fn fetchPlain(io: std.Io, alloc: std.mem.Allocator, env_map: *std.process.Environ.Map, url: []const u8, expected_hash: []const u8, options: Options) !Hashes {
+fn fetchPlain(
+    io: std.Io,
+    alloc: std.mem.Allocator,
+    tmpdir: *TmpDir,
+    env_map: *std.process.Environ.Map,
+    path_: ?[]const u8,
+    url: []const u8,
+    expected_hash: []const u8,
+    options: Options,
+) !Hashes {
     log.debug("nix fetch plain: {s}", .{url});
 
     const unpack = !std.mem.startsWith(u8, expected_hash, "N-V-");
 
+    const path_or_url = b: {
+        if (path_) |path| {
+            const uri: std.Uri = .{
+                .scheme = "file",
+                .path = .{
+                    .raw = path,
+                },
+            };
+            var w: std.Io.Writer.Allocating = .init(alloc);
+            defer w.deinit();
+            try uri.writeToStream(&w.writer, .all);
+            break :b try w.toOwnedSlice();
+        }
+        break :b try alloc.dupe(u8, url);
+    };
+    defer alloc.free(path_or_url);
+
     const stdout = stdout: {
-        var tmpdir: TmpDir = undefined;
-        try tmpdir.init(io, alloc, env_map);
-        defer tmpdir.cleanup(io, alloc);
+        const subdir = try tmpdir.randomSubdir(io, alloc);
+        defer subdir.deinit(io, alloc);
 
         var envmap = try env_map.clone(alloc);
         defer envmap.deinit();
 
-        try envmap.put("TMPDIR", tmpdir.path);
-        try envmap.put("TMP", tmpdir.path);
-        try envmap.put("TEMP", tmpdir.path);
-        try envmap.put("TEMPDIR", tmpdir.path);
+        try envmap.put("TMPDIR", subdir.path);
+        try envmap.put("TMP", subdir.path);
+        try envmap.put("TEMP", subdir.path);
+        try envmap.put("TEMPDIR", subdir.path);
 
         var nix_prefetch_url = std.process.spawn(
             io,
@@ -207,14 +241,14 @@ fn fetchPlain(io: std.Io, alloc: std.mem.Allocator, env_map: *std.process.Enviro
                         "--type",
                         "sha256",
                         "--unpack",
-                        url,
+                        path_or_url,
                     }
                 else
                     &.{
                         options.nix_prefetch_url,
                         "--type",
                         "sha256",
-                        url,
+                        path_or_url,
                     },
                 .stdin = .ignore,
                 .stdout = .pipe,

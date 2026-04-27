@@ -3,21 +3,19 @@
 
   inputs = {
     nixpkgs.url = "https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz";
-    zig = {
-      url = "git+https://codeberg.org/jcollie/zig-overlay.git";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs =
     {
       nixpkgs,
-      zig,
       ...
     }:
     let
-      lib = nixpkgs.lib;
-      platforms = lib.attrNames zig.packages;
+      platforms = [
+        "aarch64-darwin"
+        "aarch64-linux"
+        "x86_64-linux"
+      ];
       makePackages =
         system:
         import nixpkgs {
@@ -32,14 +30,12 @@
             pkgs.nix-prefetch-git
             pkgs.nixfmt
             pkgs.valgrind
-            zig.packages.${pkgs.stdenv.hostPlatform.system}."0.16.0"
+            pkgs.zig_0_16
           ];
         };
       });
       packages = forAllSystems (pkgs: {
-        zon2nix = pkgs.callPackage ./package.nix {
-          zig = zig.packages.${pkgs.stdenv.hostPlatform.system}."0.16.0";
-        };
+        zon2nix = pkgs.callPackage ./package.nix { };
       });
     };
 }
