@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz";
     zig = {
-      url = "git+https://git.ocjtech.us/jeff/zig-overlay.git";
+      url = "git+https://codeberg.org/jcollie/zig-overlay.git";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
