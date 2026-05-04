@@ -26,17 +26,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1777234348,
-        "narHash": "sha256-fKw44a4qbUuI5eTG8k0gPbqMV5TOrjYF35PBzsYgd2U=",
+        "lastModified": 1777896780,
+        "narHash": "sha256-xd8GXG0GALLdLrtPCykyqkqyPgCFoxpSnQYQ6UlC9vE=",
         "ref": "refs/heads/main",
-        "rev": "2c781c0609ecda600ab98f98cca417bbd981bd53",
-        "revCount": 1677,
+        "rev": "6b836bae047ff4e4c21b7c0ad997370aaada11be",
+        "revCount": 1682,
         "type": "git",
-        "url": "https://git.ocjtech.us/jeff/zig-overlay.git"
+        "url": "https://codeberg.org/jcollie/zig-overlay.git"
       },
       "original": {
         "type": "git",
-        "url": "https://git.ocjtech.us/jeff/zig-overlay.git"
+        "url": "https://codeberg.org/jcollie/zig-overlay.git"
       }
     }
   },
