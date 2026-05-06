@@ -15,28 +15,7 @@
     },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs",
-        "zig": "zig"
-      }
-    },
-    "zig": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1777234348,
-        "narHash": "sha256-fKw44a4qbUuI5eTG8k0gPbqMV5TOrjYF35PBzsYgd2U=",
-        "ref": "refs/heads/main",
-        "rev": "2c781c0609ecda600ab98f98cca417bbd981bd53",
-        "revCount": 1677,
-        "type": "git",
-        "url": "https://git.ocjtech.us/jeff/zig-overlay.git"
-      },
-      "original": {
-        "type": "git",
-        "url": "https://git.ocjtech.us/jeff/zig-overlay.git"
+        "nixpkgs": "nixpkgs"
       }
     }
   },
