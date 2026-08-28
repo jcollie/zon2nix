@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey C. Ollie <jeff@ocjtech.us>
+//
+// SPDX-License-Identifier: MIT
+
 const Zig = @This();
 
 const std = @import("std");

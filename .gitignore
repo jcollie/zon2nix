@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2024 Jari Vetoniemi <jari.vetoniemi@cloudef.pw>
+# SPDX-FileCopyrightText: 2025 Jeffrey C. Ollie <jeff@ocjtech.us>
+#
+# SPDX-License-Identifier: MIT
+
 /.zig-cache
 /zig-out
 /zig-pkg

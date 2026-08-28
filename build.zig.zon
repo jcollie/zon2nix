@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025 Jeffrey C. Ollie <jeff@ocjtech.us>
+//
+// SPDX-License-Identifier: MIT
+
 .{
     .name = .zon2nix,
     .version = "0.5.0",

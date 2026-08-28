@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025 Jeffrey C. Ollie <jeff@ocjtech.us>
+//
+// SPDX-License-Identifier: MIT
+
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {

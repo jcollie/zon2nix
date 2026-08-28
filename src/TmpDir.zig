@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025 Jeffrey C. Ollie <jeff@ocjtech.us>
+//
+// SPDX-License-Identifier: MIT
+
 const TmpDir = @This();
 
 const std = @import("std");

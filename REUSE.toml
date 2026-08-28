@@ -1,0 +1,19 @@
+version = 1
+
+[[annotations]]
+path = "flake.lock"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "src/header_0_15.nix"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2025 Jeffrey C. Ollie <jeff@ocjtech.us>"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "src/header_0_16.nix"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Jeffrey C. Ollie <jeff@ocjtech.us>"
+SPDX-License-Identifier = "MIT"
