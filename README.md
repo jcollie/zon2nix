@@ -121,6 +121,28 @@ postPatch = ''
 Whenever you add, remove, or update a dependency in `build.zig.zon`, re-run
 `zon2nix` to regenerate the file and commit the result.
 
+## Cloning with Radicle
+
+The repository is published on [Radicle](https://radicle.xyz/), a peer-to-peer
+code forge. To clone it:
+
+```bash
+rad clone rad:z4QfQ4qG1WzhFeo7ktFHc3VhZ1KuY
+```
+
+If you don't have Radicle set up yet, install the `rad` CLI and create an
+identity first:
+
+```bash
+curl -sSf https://radicle.xyz/install | sh
+rad auth
+```
+
+Cloning also seeds the repository, helping keep it available on the network.
+The repository is additionally mirrored at
+[github.com/jcollie/zon2nix](https://github.com/jcollie/zon2nix) and
+[codeberg.org/jcollie/zon2nix](https://codeberg.org/jcollie/zon2nix).
+
 ## Development
 
 A development shell with Zig, `nix-prefetch-git`, `nixfmt`, and `valgrind` is
