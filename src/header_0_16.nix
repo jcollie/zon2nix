@@ -23,7 +23,7 @@ let
       ''
         # workaround https://codeberg.org/ziglang/zig/issues/31866
         # https://github.com/Cloudef/zig2nix/issues/54
-        mkdir "$TMPDIR/src" "$TMPDIR/cache" "$TMPDIR/tmp"
+        mkdir "$TMPDIR/src" "$TMPDIR/cache" "$TMPDIR/cache/tmp"
         touch "$TMPDIR/src/build.zig"
         hash="$(cd "$TMPDIR/src" && zig fetch --global-cache-dir "$TMPDIR/cache" ${artifact})"
         mkdir "$out"

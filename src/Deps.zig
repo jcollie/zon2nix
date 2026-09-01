@@ -20,8 +20,8 @@ pub fn init(self: *Deps, io: std.Io, alloc: std.mem.Allocator, env_map: *std.pro
     try self.tmpdir.init(io, alloc, env_map);
     // create dir structure
     try self.tmpdir.dir.createDir(io, "cache", .default_dir);
+    try self.tmpdir.dir.createDir(io, "cache/tmp", .default_dir);
     try self.tmpdir.dir.createDir(io, "src", .default_dir);
-    try self.tmpdir.dir.createDir(io, "tmp", .default_dir);
     const f = try self.tmpdir.dir.createFile(io, "src/build.zig", .{});
     defer f.close(io);
 
