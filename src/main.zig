@@ -288,7 +288,7 @@ pub fn main(init: std.process.Init) !u8 {
         var nixfmt = std.process.spawn(
             io,
             .{
-                .argv = &.{options.nixfmt},
+                .argv = &.{options.nixfmt, "-"},
                 .stdin = .pipe,
                 .stdout = .pipe,
             },
