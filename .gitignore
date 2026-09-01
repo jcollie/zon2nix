@@ -7,3 +7,4 @@
 /zig-out
 /zig-pkg
 /result*
+/x.nix
