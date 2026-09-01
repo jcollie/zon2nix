@@ -61,7 +61,7 @@ pub fn main(init: std.process.Init) !u8 {
         paths.deinit(alloc);
     }
 
-    var zig_version: ZigVersion = .@"15";
+    var zig_version: ZigVersion = .@"16";
 
     var txt_out: ?[]const u8 = null;
     defer if (txt_out) |f| alloc.free(f);
