@@ -93,5 +93,26 @@ let
       };
     in
     fetcher.${proto};
+  # The packages, as real directories rather than as a farm of symlinks.
+  #
+  # Zig runs a dependency's own build steps with the working directory set to
+  # that dependency, and points at the program to run with a path counted in
+  # directories up from there. Through a symlink the two disagree: Zig counts
+  # from `<farm>/<package>/`, four directories below the root, while the kernel
+  # resolves the working directory to `/nix/store/<hash>`, which is three, so
+  # the path lands one short of where the program is.
+  #
+  # It works anyway when the build directory is `/build`, because the sum then
+  # overshoots into the root and going above the root stays there. It fails
+  # when the build directory is under `/nix/var/nix/builds`, which is where Nix
+  # puts it when the sandbox is off. Copying makes the two depths agree, so it
+  # works either way.
+  copyFarm =
+    farm: entries:
+    runCommandLocal farm { } ''
+      mkdir -p "$out"
+      cp --recursive --dereference --reflink=auto --no-preserve=mode \
+        ${linkFarm farm entries}/. "$out/"
+    '';
 in
-linkFarm name [
+copyFarm name [
