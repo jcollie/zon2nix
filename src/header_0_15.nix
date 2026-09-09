@@ -129,7 +129,7 @@ let
       }
       ''
         mkdir -p "$out"
-        cp --recursive --symbolic-link --dereference --no-preserve=mode \
+        cp --recursive --link --dereference --no-preserve=mode \
           ${linkFarm farm entries}/. "$out/"
       '';
 in
