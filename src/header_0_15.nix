@@ -109,11 +109,24 @@ let
   # puts it when the sandbox is off. Real directories make the two depths
   # agree, so it works either way.
   #
-  # Only the directories have to be real. `--symbolic-link` leaves the files
-  # pointing into each dependency's own store path, so the farm is a few
-  # megabytes of symlinks rather than a second copy of every dependency, two
-  # projects sharing a dependency share it in the store, and a file keeps the
-  # mode it was fetched with.
+  # The files have to be real as well, which is the expensive part and cannot
+  # be avoided. `--symbolic-link` would leave them pointing into each
+  # dependency's own store path, so that the farm is a few megabytes rather
+  # than a second copy of every dependency -- but Zig's
+  # `installHeadersDirectory` walks the directory and copies only the entries
+  # whose kind is `.file`. Symlinked headers are skipped without a word, and
+  # the first thing to include one fails with `'dcimgui.h' not found`.
+  #
+  # `--link` is not the way out. A hard link into a Nix output is a file the
+  # builder did not create: inside the Linux sandbox the store is a separate
+  # mount and `link` fails with `Invalid cross-device link`, while on Darwin it
+  # succeeds and leaves root-owned files in the output, which Nix refuses while
+  # canonicalising with `invalid ownership on file`.
+  #
+  # So it is a real copy, with `--reflink=auto` to share the blocks on a
+  # filesystem that can. `nix store optimise` recovers the duplication after
+  # the fact, hard-linking identical files across the store, which is the
+  # store's own business to do and not a build's.
   copyFarm =
     farm: entries: pathDependencyPackages:
     runCommandLocal farm
@@ -129,7 +142,7 @@ let
       }
       ''
         mkdir -p "$out"
-        cp --recursive --link --dereference --no-preserve=mode \
+        cp --recursive --reflink=auto --dereference --no-preserve=mode \
           ${linkFarm farm entries}/. "$out/"
       '';
 in
