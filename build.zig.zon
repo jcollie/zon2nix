@@ -4,7 +4,7 @@
 
 .{
     .name = .zon2nix,
-    .version = "0.7.0",
+    .version = "0.7.2",
     .fingerprint = 0xf85edb58f3e511f2,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
