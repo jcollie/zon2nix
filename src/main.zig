@@ -22,6 +22,105 @@ const Manifest = struct {
     owner: ?*zon2nix.Dep,
 };
 
+/// How many packages to fetch at once, when `--jobs` does not say.
+///
+/// The work is a download and a couple of subprocesses per package, so the
+/// useful number is set by how long each one waits rather than by how many
+/// cores there are; eight keeps the pipe full without opening an unreasonable
+/// number of connections to whoever is serving the packages.
+const default_jobs: usize = 8;
+
+/// Fetches a round of packages, several at a time.
+///
+/// Every worker takes the next package off `round` and does the whole of it,
+/// so a slow one holds up nothing but itself. The packages in a round are
+/// distinct and each worker touches only its own, which is what makes this
+/// safe without a lock: the shared things it reaches -- the allocator, the
+/// temporary directory, the environment -- are threadsafe or read-only.
+const Fetcher = struct {
+    io: std.Io,
+    alloc: std.mem.Allocator,
+    deps: *zon2nix.Deps,
+    env_map: *std.process.Environ.Map,
+    round: []const *zon2nix.Dep,
+    next: std.atomic.Value(usize),
+    want_nix_hashes: bool,
+    nix_prefetch_git: []const u8,
+    nix_prefetch_url: []const u8,
+
+    fn work(self: *Fetcher) std.Io.Cancelable!void {
+        while (true) {
+            const index = self.next.fetchAdd(1, .monotonic);
+            if (index >= self.round.len) return;
+
+            const dep = self.round[index];
+            dep.fetch(
+                self.io,
+                self.alloc,
+                &self.deps.tmpdir,
+                &self.deps.zig,
+                self.env_map,
+                self.want_nix_hashes,
+                .{
+                    .nix_prefetch_git = self.nix_prefetch_git,
+                    .nix_prefetch_url = self.nix_prefetch_url,
+                },
+            ) catch |err| {
+                // The group discards what a worker returns, so the failure is
+                // left on the package and reported by the caller.
+                dep.fetch_error = err;
+            };
+        }
+    }
+};
+
+fn fetchRound(
+    io: std.Io,
+    alloc: std.mem.Allocator,
+    deps: *zon2nix.Deps,
+    round: []const *zon2nix.Dep,
+    jobs: usize,
+    env_map: *std.process.Environ.Map,
+    want_nix_hashes: bool,
+    nix_options: struct {
+        nix_prefetch_git: []const u8,
+        nix_prefetch_url: []const u8,
+    },
+) !void {
+    if (round.len == 0) return;
+
+    var fetcher: Fetcher = .{
+        .io = io,
+        .alloc = alloc,
+        .deps = deps,
+        .env_map = env_map,
+        .round = round,
+        .next = .init(0),
+        .want_nix_hashes = want_nix_hashes,
+        .nix_prefetch_git = nix_options.nix_prefetch_git,
+        .nix_prefetch_url = nix_options.nix_prefetch_url,
+    };
+
+    log.debug("fetching {d} package(s), {d} at a time", .{ round.len, jobs });
+
+    var group: std.Io.Group = .init;
+    // Awaited on the way out so that no worker outlives `fetcher`, whatever
+    // happens in between.
+    defer group.await(io) catch {};
+
+    var spawned: usize = 1; // this thread is one of the workers
+    while (spawned < @min(round.len, jobs)) : (spawned += 1) {
+        group.concurrent(io, Fetcher.work, .{&fetcher}) catch |err| switch (err) {
+            // An Io that will not spawn anything is not an error: this thread
+            // does the whole round itself, which is what zon2nix did before
+            // there was a choice.
+            error.ConcurrencyUnavailable => break,
+        };
+    }
+
+    try fetcher.work();
+}
+
 pub const std_options: std.Options = .{
     .logFn = myLogFn,
 };
@@ -84,6 +183,8 @@ pub fn main(init: std.process.Init) !u8 {
     var flatpak_out: ?[]const u8 = null;
     defer if (flatpak_out) |f| alloc.free(f);
 
+    var jobs: usize = default_jobs;
+
     {
         var it = try init.minimal.args.iterateAllocator(alloc);
         defer it.deinit();
@@ -137,6 +238,18 @@ pub fn main(init: std.process.Init) !u8 {
                 continue;
             }
 
+            if (try getParam("--jobs", arg, &it)) |param| {
+                jobs = std.fmt.parseUnsigned(usize, param, 10) catch {
+                    log.err("--jobs wants a number, got '{s}'", .{param});
+                    return 1;
+                };
+                if (jobs == 0) {
+                    log.err("--jobs must be at least 1", .{});
+                    return 1;
+                }
+                continue;
+            }
+
             var buf: [std.fs.max_path_bytes]u8 = undefined;
             const len = try cwd.realPathFile(io, arg, &buf);
             try paths.append(alloc, .{ .path = try alloc.dupe(u8, buf[0..len]), .owner = null });
@@ -166,101 +279,140 @@ pub fn main(init: std.process.Init) !u8 {
         paths_seen.deinit(alloc);
     }
 
-    // loop through all the paths
-    while (paths.pop()) |manifest| {
-        const path = manifest.path;
-        defer alloc.free(path);
+    // The manifests are walked a level at a time: everything in `paths` is
+    // parsed, everything new that it names is fetched at once, and what those
+    // packages contain becomes the next level. Parsing stays on this thread,
+    // so the dependency table needs no locking; only the fetching -- which is
+    // all network and subprocesses -- is spread out.
+    var next_frontier: std.ArrayList(Manifest) = .empty;
+    defer {
+        for (next_frontier.items) |manifest| alloc.free(manifest.path);
+        next_frontier.deinit(alloc);
+    }
 
-        // if we've already processed a path don't do it again
-        if (paths_seen.contains(path)) continue;
-        try paths_seen.put(alloc, try alloc.dupe(u8, path), true);
+    // A package still to be fetched this round.
+    var round: std.ArrayList(*zon2nix.Dep) = .empty;
+    defer round.deinit(alloc);
 
-        log.debug("reading {s}", .{path});
-        var file = cwd.openFile(
-            io,
-            path,
-            .{ .mode = .read_only },
-        ) catch |err| switch (err) {
-            error.FileNotFound => {
-                log.debug("{s} not found", .{path});
-                continue;
-            },
-            else => |e| return e,
-        };
-        defer file.close(io);
+    // if we're not outputting a nix derivation or json, skip fetching the hash
+    const want_nix_hashes = nix_out != null or json_out != null or flatpak_out != null;
 
-        var buffer: [1024]u8 = undefined;
-        var reader = file.reader(io, &buffer);
+    while (paths.items.len > 0) {
+        round.clearRetainingCapacity();
 
-        var build_zig_zon: zon2nix.BuildZigZon = try .init(alloc, &reader.interface);
-        defer build_zig_zon.deinit();
+        for (paths.items) |manifest| {
+            const path = manifest.path;
 
-        var it = build_zig_zon.dependencies.iterator();
-        while (it.next()) |entry| {
-            const name = entry.key_ptr.*;
-            const zon_dep = entry.value_ptr;
+            // if we've already processed a path don't do it again
+            if (paths_seen.contains(path)) continue;
+            try paths_seen.put(alloc, try alloc.dupe(u8, path), true);
 
-            if (zon_dep.url) |url| {
-                const zig_hash = zon_dep.hash orelse {
-                    log.err("hash is missing from {s} in {s}", .{ name, path });
+            log.debug("reading {s}", .{path});
+            var file = cwd.openFile(
+                io,
+                path,
+                .{ .mode = .read_only },
+            ) catch |err| switch (err) {
+                error.FileNotFound => {
+                    log.debug("{s} not found", .{path});
                     continue;
-                };
+                },
+                else => |e| return e,
+            };
+            defer file.close(io);
 
-                const dep = try deps.get(io, alloc, name, url, zig_hash);
-                build_zig_zon: {
-                    const new_path = try dep.getBuildZigZon(io, alloc, &deps.zig, &deps.tmpdir) orelse break :build_zig_zon;
-                    errdefer alloc.free(new_path);
+            var buffer: [1024]u8 = undefined;
+            var reader = file.reader(io, &buffer);
 
-                    log.debug("adding to paths: {s}", .{new_path});
-                    try paths.append(
-                        alloc,
-                        .{ .path = new_path, .owner = dep },
-                    );
+            var build_zig_zon: zon2nix.BuildZigZon = try .init(alloc, &reader.interface);
+            defer build_zig_zon.deinit();
+
+            var it = build_zig_zon.dependencies.iterator();
+            while (it.next()) |entry| {
+                const name = entry.key_ptr.*;
+                const zon_dep = entry.value_ptr;
+
+                if (zon_dep.url) |url| {
+                    const zig_hash = zon_dep.hash orelse {
+                        log.err("hash is missing from {s} in {s}", .{ name, path });
+                        continue;
+                    };
+
+                    const found = try deps.get(alloc, name, url, zig_hash);
+                    if (found.is_new) try round.append(alloc, found.dep);
                 }
 
-                // if we're not outputting a nix derivation or json, skip fetching the hash
-                if (nix_out != null or json_out != null or flatpak_out != null) {
-                    try dep.getNixHashes(
+                if (zon_dep.path) |dep_path| {
+                    // Zig 0.16.0 hangs in `--system` mode on a fetched package
+                    // with a `.path` dependency, so the package that brought
+                    // this manifest in has to be named in the generated
+                    // expression.
+                    if (manifest.owner) |owner| owner.has_path_dependency = true;
+
+                    const dir = try cwd.openDir(
                         io,
+                        std.fs.path.dirname(path) orelse ".",
+                        .{},
+                    );
+                    const full_path = try dir.realPathFileAlloc(io, dep_path, alloc);
+                    defer alloc.free(full_path);
+
+                    const new_path = try std.fs.path.join(
                         alloc,
-                        init.environ_map,
-                        &deps.tmpdir,
-                        .{
-                            .nix_prefetch_git = options.nix_prefetch_git,
-                            .nix_prefetch_url = options.nix_prefetch_url,
+                        &.{
+                            full_path,
+                            "build.zig.zon",
                         },
                     );
+                    errdefer alloc.free(new_path);
+
+                    // A `.path` dependency is already on disk, so it belongs
+                    // to the round being parsed rather than to the one being
+                    // fetched, and stays attributed to the package it came
+                    // out of.
+                    log.debug("adding to paths: {s}", .{new_path});
+                    try next_frontier.append(
+                        alloc,
+                        .{ .path = new_path, .owner = manifest.owner },
+                    );
                 }
             }
-
-            if (zon_dep.path) |dep_path| {
-                // Zig 0.16.0 hangs in `--system` mode on a fetched package
-                // with a `.path` dependency, so the package that brought this
-                // manifest in has to be named in the generated expression.
-                if (manifest.owner) |owner| owner.has_path_dependency = true;
-
-                const dir = try cwd.openDir(
-                    io,
-                    std.fs.path.dirname(path) orelse ".",
-                    .{},
-                );
-                const full_path = try dir.realPathFileAlloc(io, dep_path, alloc);
-                defer alloc.free(full_path);
-
-                const new_path = try std.fs.path.join(
-                    alloc,
-                    &.{
-                        full_path,
-                        "build.zig.zon",
-                    },
-                );
-                log.debug("adding to paths: {s}", .{new_path});
-                try paths.append(
-                    alloc,
-                    .{ .path = new_path, .owner = manifest.owner },
-                );
-            }
         }
+
+        for (paths.items) |manifest| alloc.free(manifest.path);
+        paths.clearRetainingCapacity();
+
+        try fetchRound(
+            io,
+            alloc,
+            &deps,
+            round.items,
+            jobs,
+            init.environ_map,
+            want_nix_hashes,
+            .{
+                .nix_prefetch_git = options.nix_prefetch_git,
+                .nix_prefetch_url = options.nix_prefetch_url,
+            },
+        );
+
+        var failed = false;
+        for (round.items) |dep| {
+            if (dep.fetch_error) |err| {
+                log.err("fetching {s}: {t}", .{ dep.getUrl(), err });
+                failed = true;
+                continue;
+            }
+            const manifest_path = dep.manifest_path orelse continue;
+            log.debug("adding to paths: {s}", .{manifest_path});
+            try next_frontier.append(
+                alloc,
+                .{ .path = try alloc.dupe(u8, manifest_path), .owner = dep },
+            );
+        }
+        if (failed) return 1;
+
+        std.mem.swap(std.ArrayList(Manifest), &paths, &next_frontier);
     }
 
     var list: std.ArrayList(*zon2nix.Dep) = .empty;

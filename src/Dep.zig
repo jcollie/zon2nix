@@ -29,6 +29,13 @@ nix: ?struct {
     hex: []const u8,
     unpack: bool,
 },
+/// Where this package's own `build.zig.zon` ended up once it was fetched,
+/// or null if it has none. Filled in by `fetch`.
+manifest_path: ?[]const u8,
+/// What went wrong while fetching this package, if anything. A fetch runs on
+/// a worker whose return value is discarded, so the failure is recorded here
+/// and reported once the round it belongs to has finished.
+fetch_error: ?anyerror,
 /// Whether this package's own `build.zig.zon`, or that of a package it
 /// reaches by `.path`, declares a dependency by `.path`. Zig 0.16.0 cannot
 /// build such a package through `zig build --system`, so the generated Nix
@@ -39,9 +46,7 @@ const Hasher = std.crypto.hash.sha2.Sha256;
 
 pub fn init(
     self: *Dep,
-    io: std.Io,
     alloc: std.mem.Allocator,
-    tmpdir: *TmpDir,
     name: []const u8,
     url: []const u8,
     zig_hash: []const u8,
@@ -53,6 +58,8 @@ pub fn init(
         .nix = null,
         .names = .empty,
         .urls = .empty,
+        .manifest_path = null,
+        .fetch_error = null,
         .has_path_dependency = false,
     };
     errdefer self.deinit(alloc);
@@ -67,12 +74,30 @@ pub fn init(
         errdefer alloc.free(owned);
         try self.urls.putNoClobber(alloc, owned, true);
     }
+}
 
-    try self.download(io, alloc, tmpdir, url);
+/// Everything that has to happen over the network for one package, and
+/// nothing that touches state shared with any other: the artifact is
+/// downloaded and hashed, `zig fetch` unpacks it, and `nix-prefetch-*` is
+/// asked for the hash Nix will want. Safe to run for many packages at once.
+pub fn fetch(
+    self: *Dep,
+    io: std.Io,
+    alloc: std.mem.Allocator,
+    tmpdir: *TmpDir,
+    zigcli: *Zig,
+    env_map: *std.process.Environ.Map,
+    want_nix_hashes: bool,
+    options: nixpkg.Options,
+) !void {
+    try self.download(io, alloc, tmpdir, self.getUrl());
+    self.manifest_path = try self.getBuildZigZon(io, alloc, zigcli, tmpdir);
+    if (want_nix_hashes) try self.getNixHashes(io, alloc, env_map, tmpdir, options);
 }
 
 pub fn deinit(self: *Dep, alloc: std.mem.Allocator) void {
     alloc.free(self.zig_hash);
+    if (self.manifest_path) |path| alloc.free(path);
     if (self.local) |local| {
         alloc.free(local.path);
         alloc.free(local.sha256);

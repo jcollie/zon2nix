@@ -78,6 +78,20 @@ it must reference the matching Zig package from nixpkgs:
 It also decides where the generated packages have to be put at build time,
 which the two versions do differently — see below.
 
+### Fetching
+
+Packages are fetched several at a time. Each one costs a download, a `zig
+fetch` and a `nix-prefetch-*` run, nearly all of which is waiting, so this is
+most of the wall-clock time of a run: eight dependencies that take 12 seconds
+one after another take 4 fetched eight at a time.
+
+- `--jobs=N` — fetch N packages at once (default 8)
+
+Manifests are read one at a time, a level of the dependency graph at a time, so
+what comes out does not depend on `N` — only how long it takes to produce.
+Raising it much past the default tends not to help, since by then the work is
+waiting on whoever is serving the packages rather than on zon2nix.
+
 ### Logging options
 
 - `--quiet` — decrease verbosity (may be repeated)
