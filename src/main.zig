@@ -13,6 +13,15 @@ pub const ZigVersion = enum {
     @"16",
 };
 
+/// A `build.zig.zon` still to be visited, and the fetched package it came out
+/// of. `owner` is null for the manifests named on the command line, which are
+/// the project's own, and is carried across a `.path` dependency so that a
+/// nested one is still attributed to the package that was fetched.
+const Manifest = struct {
+    path: []const u8,
+    owner: ?*zon2nix.Dep,
+};
+
 pub const std_options: std.Options = .{
     .logFn = myLogFn,
 };
@@ -53,10 +62,10 @@ pub fn main(init: std.process.Init) !u8 {
     const cwd: std.Io.Dir = .cwd();
 
     // stack of paths to build.zig.zon files that we need to visit
-    var paths: std.ArrayList([]const u8) = .empty;
+    var paths: std.ArrayList(Manifest) = .empty;
     defer {
-        for (paths.items) |path| {
-            alloc.free(path);
+        for (paths.items) |manifest| {
+            alloc.free(manifest.path);
         }
         paths.deinit(alloc);
     }
@@ -130,7 +139,7 @@ pub fn main(init: std.process.Init) !u8 {
 
             var buf: [std.fs.max_path_bytes]u8 = undefined;
             const len = try cwd.realPathFile(io, arg, &buf);
-            try paths.append(alloc, try alloc.dupe(u8, buf[0..len]));
+            try paths.append(alloc, .{ .path = try alloc.dupe(u8, buf[0..len]), .owner = null });
         }
     }
 
@@ -140,7 +149,7 @@ pub fn main(init: std.process.Init) !u8 {
         log.warn("no paths specified on the command line, looking for build.zig.zon in the current directory", .{});
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         const len = try cwd.realPathFile(io, "build.zig.zon", &buf);
-        try paths.append(alloc, try alloc.dupe(u8, buf[0..len]));
+        try paths.append(alloc, .{ .path = try alloc.dupe(u8, buf[0..len]), .owner = null });
     }
 
     var deps: zon2nix.Deps = undefined;
@@ -158,7 +167,8 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     // loop through all the paths
-    while (paths.pop()) |path| {
+    while (paths.pop()) |manifest| {
+        const path = manifest.path;
         defer alloc.free(path);
 
         // if we've already processed a path don't do it again
@@ -204,7 +214,7 @@ pub fn main(init: std.process.Init) !u8 {
                     log.debug("adding to paths: {s}", .{new_path});
                     try paths.append(
                         alloc,
-                        new_path,
+                        .{ .path = new_path, .owner = dep },
                     );
                 }
 
@@ -224,6 +234,11 @@ pub fn main(init: std.process.Init) !u8 {
             }
 
             if (zon_dep.path) |dep_path| {
+                // Zig 0.16.0 hangs in `--system` mode on a fetched package
+                // with a `.path` dependency, so the package that brought this
+                // manifest in has to be named in the generated expression.
+                if (manifest.owner) |owner| owner.has_path_dependency = true;
+
                 const dir = try cwd.openDir(
                     io,
                     std.fs.path.dirname(path) orelse ".",
@@ -242,7 +257,7 @@ pub fn main(init: std.process.Init) !u8 {
                 log.debug("adding to paths: {s}", .{new_path});
                 try paths.append(
                     alloc,
-                    new_path,
+                    .{ .path = new_path, .owner = manifest.owner },
                 );
             }
         }
@@ -288,7 +303,7 @@ pub fn main(init: std.process.Init) !u8 {
         var nixfmt = std.process.spawn(
             io,
             .{
-                .argv = &.{options.nixfmt, "-"},
+                .argv = &.{ options.nixfmt, "-" },
                 .stdin = .pipe,
                 .stdout = .pipe,
             },
@@ -341,6 +356,16 @@ pub fn main(init: std.process.Init) !u8 {
                 .nix_hash = nix.b64,
                 .unpack = nix.unpack,
             });
+        }
+
+        // The second list: packages that declare `.path` dependencies of
+        // their own, which `zig build --system` cannot build on Zig 0.16.0
+        // without forking them.
+        try stdin_writer.interface.writeAll("]\n[\n");
+
+        for (list.items) |dep| {
+            if (!dep.has_path_dependency) continue;
+            try stdin_writer.interface.print("  \"{s}\"\n", .{dep.zig_hash});
         }
 
         try stdin_writer.interface.writeAll("]\n");

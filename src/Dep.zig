@@ -29,6 +29,11 @@ nix: ?struct {
     hex: []const u8,
     unpack: bool,
 },
+/// Whether this package's own `build.zig.zon`, or that of a package it
+/// reaches by `.path`, declares a dependency by `.path`. Zig 0.16.0 cannot
+/// build such a package through `zig build --system`, so the generated Nix
+/// expression names them and a package that uses `--system` forks them.
+has_path_dependency: bool,
 
 const Hasher = std.crypto.hash.sha2.Sha256;
 
@@ -48,6 +53,7 @@ pub fn init(
         .nix = null,
         .names = .empty,
         .urls = .empty,
+        .has_path_dependency = false,
     };
     errdefer self.deinit(alloc);
 

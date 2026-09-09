@@ -94,7 +94,8 @@ let
       };
     in
     fetcher.${proto};
-  # The packages, as real directories rather than as a farm of symlinks.
+  # The packages, as real directories holding symlinked files, rather than as
+  # a farm of symlinked directories.
   #
   # Zig runs a dependency's own build steps with the working directory set to
   # that dependency, and points at the program to run with a path counted in
@@ -106,14 +107,31 @@ let
   # It works anyway when the build directory is `/build`, because the sum then
   # overshoots into the root and going above the root stays there. It fails
   # when the build directory is under `/nix/var/nix/builds`, which is where Nix
-  # puts it when the sandbox is off. Copying makes the two depths agree, so it
-  # works either way.
+  # puts it when the sandbox is off. Real directories make the two depths
+  # agree, so it works either way.
+  #
+  # Only the directories have to be real. `--symbolic-link` leaves the files
+  # pointing into each dependency's own store path, so the farm is a few
+  # megabytes of symlinks rather than a second copy of every dependency, two
+  # projects sharing a dependency share it in the store, and a file keeps the
+  # mode it was fetched with.
   copyFarm =
-    farm: entries:
-    runCommandLocal farm { } ''
-      mkdir -p "$out"
-      cp --recursive --dereference --reflink=auto --no-preserve=mode \
-        ${linkFarm farm entries}/. "$out/"
-    '';
+    farm: entries: pathDependencyPackages:
+    runCommandLocal farm
+      {
+        # The packages whose own manifest declares a dependency by `.path`.
+        # Zig 0.16.0 cannot build these through `zig build --system`: it spins
+        # in userspace forever, because a `.path` dependency's hash is computed
+        # against the system package directory during the fetch and against the
+        # real global cache afterwards, and in that mode the two disagree. A
+        # package that wants `--system` copies each of these into its build
+        # root and passes `--fork=`; see the README.
+        passthru = { inherit pathDependencyPackages; };
+      }
+      ''
+        mkdir -p "$out"
+        cp --recursive --symbolic-link --dereference --no-preserve=mode \
+          ${linkFarm farm entries}/. "$out/"
+      '';
 in
 copyFarm name [
