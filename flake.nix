@@ -35,8 +35,12 @@
             pkgs.nix-prefetch-git
             pkgs.nixfmt
             pkgs.reuse
-            pkgs.valgrind
             pkgs.zig_0_16
+          ]
+          # valgrind does not build on Darwin, and this flake offers an
+          # aarch64-darwin devshell.
+          ++ nixpkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+            pkgs.valgrind
           ];
         };
       });
