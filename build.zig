@@ -61,9 +61,14 @@ pub fn build(b: *std.Build) void {
         });
         const run_root_cmd = b.addRunArtifact(root_exe);
 
+        // `main_mod`, not `root_mod`. Both of these named the root module,
+        // so the tests in `src/main.zig` were compiled once as part of the
+        // library and never run at all.
         const main_exe = b.addTest(.{
-            .root_module = root_mod,
+            .root_module = main_mod,
         });
+        main_exe.root_module.addImport("zon2nix", root_mod);
+        main_exe.root_module.addOptions("options", options);
         const run_main_cmd = b.addRunArtifact(main_exe);
         test_step.dependOn(&run_root_cmd.step);
         test_step.dependOn(&run_main_cmd.step);

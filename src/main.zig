@@ -22,6 +22,9 @@ const Manifest = struct {
     owner: ?*zon2nix.Dep,
 };
 
+/// The only file name zon2nix ever reads a manifest from.
+const manifest_name = "build.zig.zon";
+
 /// How many packages to fetch at once, when `--jobs` does not say.
 ///
 /// The work is a download and a couple of subprocesses per package, so the
@@ -154,6 +157,56 @@ fn getParam(name: []const u8, arg: []const u8, it: *std.process.Args.Iterator) !
     return std.mem.cutPrefix(u8, rest, "=") orelse return it.next() orelse return error.MissingPath;
 }
 
+/// Whether writing to `out_path` would destroy a manifest, and which one.
+///
+/// Two ways it can. It may resolve to one of the manifests about to be read,
+/// which is what happens when an output flag swallows the positional argument
+/// meant as the input. Or it may simply be called `build.zig.zon`, which no
+/// output ever wants to be and which also covers the manifests reached later
+/// through a `.path` dependency -- those are not known yet at the point this
+/// is called, and are all named that.
+///
+/// The returned reason is owned by the caller.
+fn wouldOverwriteManifest(
+    alloc: std.mem.Allocator,
+    io: std.Io,
+    cwd: std.Io.Dir,
+    out_path: []const u8,
+    inputs: []const Manifest,
+) !?[]const u8 {
+    if (std.mem.eql(u8, std.fs.path.basename(out_path), manifest_name)) {
+        return try std.fmt.allocPrint(alloc, "'{s}', which is a manifest", .{out_path});
+    }
+
+    // The inputs are already absolute, so the output has to be made absolute
+    // too before they can be compared. The file itself need not exist yet --
+    // it is about to be written -- so it is the *directory* that gets
+    // resolved, which does have to exist for the write to land anywhere.
+    //
+    // Note that `Dir.cwd()`'s handle is `AT_FDCWD` rather than a real
+    // descriptor, so asking it for its own path does not work; naming a path
+    // relative to it does.
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_name = std.fs.path.dirname(out_path) orelse ".";
+    const dir_len = cwd.realPathFile(io, dir_name, &buf) catch {
+        // No such directory: the write will fail on its own, and with a
+        // better message than anything that could be invented here.
+        return null;
+    };
+    const resolved = try std.fs.path.join(alloc, &.{
+        buf[0..dir_len],
+        std.fs.path.basename(out_path),
+    });
+    defer alloc.free(resolved);
+
+    for (inputs) |manifest| {
+        if (std.mem.eql(u8, manifest.path, resolved)) {
+            return try std.fmt.allocPrint(alloc, "'{s}', which it is also reading", .{out_path});
+        }
+    }
+    return null;
+}
+
 pub fn main(init: std.process.Init) !u8 {
     const alloc = init.gpa;
     const io = init.io;
@@ -261,8 +314,34 @@ pub fn main(init: std.process.Init) !u8 {
     if (paths.items.len == 0) {
         log.warn("no paths specified on the command line, looking for build.zig.zon in the current directory", .{});
         var buf: [std.fs.max_path_bytes]u8 = undefined;
-        const len = try cwd.realPathFile(io, "build.zig.zon", &buf);
+        const len = try cwd.realPathFile(io, manifest_name, &buf);
         try paths.append(alloc, .{ .path = try alloc.dupe(u8, buf[0..len]), .owner = null });
+    }
+
+    // Refuse to write an output over a manifest, before any work is done.
+    //
+    // `--txt`, `--nix`, `--json` and `--flatpak` all name an *output*, and in
+    // the `--txt FILE` form that is easy to read as an input -- `zon2nix --txt
+    // build.zig.zon` is a plausible-looking way to ask for a listing and is in
+    // fact a request to overwrite the manifest with one. It is worth noticing
+    // that this leaves nothing to recover from: the manifest holds the URLs
+    // and hashes, and the file that replaces it holds the URLs.
+    {
+        const outputs = [_]struct { flag: []const u8, path: ?[]const u8 }{
+            .{ .flag = "--txt", .path = txt_out },
+            .{ .flag = "--nix", .path = nix_out },
+            .{ .flag = "--json", .path = json_out },
+            .{ .flag = "--flatpak", .path = flatpak_out },
+        };
+        for (outputs) |output| {
+            const out_path = output.path orelse continue;
+            if (try wouldOverwriteManifest(alloc, io, cwd, out_path, paths.items)) |reason| {
+                defer alloc.free(reason);
+                log.err("{s} would write over {s}", .{ output.flag, reason });
+                log.err("these flags name the file to write, not the manifest to read", .{});
+                return 1;
+            }
+        }
     }
 
     var deps: zon2nix.Deps = undefined;
@@ -361,7 +440,7 @@ pub fn main(init: std.process.Init) !u8 {
                         alloc,
                         &.{
                             full_path,
-                            "build.zig.zon",
+                            manifest_name,
                         },
                     );
                     errdefer alloc.free(new_path);
@@ -668,4 +747,79 @@ fn sortByUrl(_: void, lhs: *zon2nix.Dep, rhs: *zon2nix.Dep) bool {
     const a = lhs.getUrl();
     const b = rhs.getUrl();
     return std.mem.lessThan(u8, a, b);
+}
+
+test "an output named like a manifest is refused wherever it is" {
+    const alloc = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    for ([_][]const u8{
+        manifest_name,
+        "./" ++ manifest_name,
+        "sub/" ++ manifest_name,
+        "/tmp/" ++ manifest_name,
+    }) |out_path| {
+        const reason = try wouldOverwriteManifest(alloc, io, tmp.dir, out_path, &.{});
+        defer if (reason) |r| alloc.free(r);
+        try std.testing.expect(reason != null);
+        try std.testing.expect(std.mem.endsWith(u8, reason.?, "which is a manifest"));
+    }
+}
+
+test "an output that resolves onto an input is refused" {
+    const alloc = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "listed.zon", .data = ".{}\n" });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const absolute = buf[0..try tmp.dir.realPathFile(io, "listed.zon", &buf)];
+    const inputs = [_]Manifest{.{ .path = absolute, .owner = null }};
+
+    // Named relatively, where the input was recorded absolutely: the two have
+    // to be recognised as the same file, which is the whole job of resolving
+    // the output's directory.
+    {
+        const reason = try wouldOverwriteManifest(alloc, io, tmp.dir, "listed.zon", &inputs);
+        defer if (reason) |r| alloc.free(r);
+        try std.testing.expect(reason != null);
+        try std.testing.expect(std.mem.endsWith(u8, reason.?, "which it is also reading"));
+    }
+
+    // And by the same name with a detour through the directory.
+    {
+        const reason = try wouldOverwriteManifest(alloc, io, tmp.dir, "./listed.zon", &inputs);
+        defer if (reason) |r| alloc.free(r);
+        try std.testing.expect(reason != null);
+    }
+}
+
+test "an ordinary output is allowed" {
+    const alloc = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "listed.zon", .data = ".{}\n" });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const absolute = buf[0..try tmp.dir.realPathFile(io, "listed.zon", &buf)];
+    const inputs = [_]Manifest{.{ .path = absolute, .owner = null }};
+
+    for ([_][]const u8{ "build.zig.zon.nix", "deps.txt", "./out.json" }) |out_path| {
+        const reason = try wouldOverwriteManifest(alloc, io, tmp.dir, out_path, &inputs);
+        defer if (reason) |r| alloc.free(r);
+        try std.testing.expectEqual(@as(?[]const u8, null), reason);
+    }
+
+    // A directory that does not exist is not this check's business: the write
+    // will say so, and better.
+    const missing = try wouldOverwriteManifest(alloc, io, tmp.dir, "nope/out.nix", &inputs);
+    defer if (missing) |r| alloc.free(r);
+    try std.testing.expectEqual(@as(?[]const u8, null), missing);
 }

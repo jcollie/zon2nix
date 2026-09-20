@@ -67,6 +67,13 @@ and they can be combined in a single run. Options take a value either as
 
 With only `--txt`, no hashes are computed, so the run is much faster.
 
+Every one of these names the file to **write**, which is worth saying because
+the `--txt FILE` form reads so naturally as the file to *read*: `zon2nix --txt
+build.zig.zon` is a request to replace the manifest with a list of URLs, not to
+list the URLs in it. zon2nix refuses an output that is named `build.zig.zon`,
+or that resolves to a manifest it is about to read, rather than doing what it
+was asked.
+
 ### Zig version selection
 
 The generated Nix expression uses Zig itself to unpack fetched artifacts, so
