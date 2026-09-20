@@ -34,6 +34,7 @@
           packages = [
             pkgs.nix-prefetch-git
             pkgs.nixfmt
+            pkgs.reuse
             pkgs.valgrind
             pkgs.zig_0_16
           ];
