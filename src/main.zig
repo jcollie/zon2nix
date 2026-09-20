@@ -324,7 +324,7 @@ pub fn main(init: std.process.Init) !u8 {
             var buffer: [1024]u8 = undefined;
             var reader = file.reader(io, &buffer);
 
-            var build_zig_zon: zon2nix.BuildZigZon = try .init(alloc, &reader.interface);
+            var build_zig_zon: zon2nix.BuildZigZon = try .init(alloc, &reader.interface, path);
             defer build_zig_zon.deinit();
 
             var it = build_zig_zon.dependencies.iterator();
