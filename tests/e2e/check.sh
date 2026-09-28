@@ -7,8 +7,9 @@
 # the Nix expression it writes against Nix and Zig themselves:
 #
 #   1. zon2nix writes the expression, which has to match expected.nix -- or,
-#      for Zig 0.15, expected-0.15.nix. The hashes in it do not depend on the
-#      platform, so a platform that computes a different one fails here.
+#      for Zig 0.15, expected-0.15.nix -- and the JSON, which has to match
+#      expected.json. The hashes do not depend on the platform, so a platform
+#      that computes a different one fails here.
 #   2. Nix builds it, which fetches and unpacks every package the way a real
 #      build would.
 #   3. Every package in the result is hashed by `zig fetch`, and has to come
@@ -82,6 +83,15 @@ check() {
     failed=1
   fi
 }
+
+# The JSON is read by tools outside zon2nix, so it has to stay exactly as it
+# was: expected.json was written by zon2nix 0.7.3.
+echo "== generating JSON"
+zig-out/bin/zon2nix --json="$work/generated.json" "$here/build.zig.zon"
+if ! diff -u "$here/expected.json" "$work/generated.json"; then
+  echo "the generated JSON differs from $here/expected.json" >&2
+  failed=1
+fi
 
 check --16 "$here/expected.nix"
 check --15 "$here/expected-0.15.nix"

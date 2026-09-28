@@ -67,6 +67,15 @@ and they can be combined in a single run. Options take a value either as
 
 With only `--txt`, no hashes are computed, so the run is much faster.
 
+The `hash` in the JSON is in Nix's SRI form. For a naked package, one whose
+hash begins `N-V-` because it has no manifest of its own, it is the SHA-256 of
+the archive file as downloaded; for any other archive it is the Nix hash of
+the unpacked contents, stripped of their top-level directory, and for a git
+repository the Nix hash of the checkout. Tools outside zon2nix build
+distribution packages from this file, so that meaning does not change, even
+though the Nix expression now fetches most naked packages unpacked and so
+gives some of them a different hash from the JSON.
+
 Every one of these names the file to **write**, which is worth saying because
 the `--txt FILE` form reads so naturally as the file to *read*: `zon2nix --txt
 build.zig.zon` is a request to replace the manifest with a list of URLs, not to

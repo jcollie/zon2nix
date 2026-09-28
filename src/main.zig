@@ -710,7 +710,8 @@ pub fn main(init: std.process.Init) !u8 {
         try writer.interface.writeAll("{\n");
 
         for (list.items, 0..) |dep, index| {
-            const nix = dep.nix orelse return error.MissingNixHash;
+            const json_hash = try jsonHash(alloc, dep);
+            defer alloc.free(json_hash);
 
             try writer.interface.print(
                 \\  "{[zig_hash]s}": {{
@@ -723,7 +724,7 @@ pub fn main(init: std.process.Init) !u8 {
                 .zig_hash = dep.zig_hash,
                 .name = dep.getName(),
                 .url = dep.getUrl(),
-                .nix_hash = nix.hash,
+                .nix_hash = json_hash,
                 .comma = if (index < list.items.len - 1) "," else "",
             });
         }
@@ -815,6 +816,26 @@ pub fn main(init: std.process.Init) !u8 {
 // fn sortByKey(_: void, lhs: []const u8, rhs: []const u8) bool {
 //     return std.mem.lessThan(u8, lhs, rhs);
 // }
+
+/// The hash a package is given in the JSON output, owned by the caller.
+///
+/// Tools outside zon2nix build distribution packages from the JSON, so its
+/// hashes keep the meaning they had before the Nix expression chose a fetcher
+/// per archive: for a naked `N-V-` package, the SHA-256 of the archive file;
+/// for anything else, the Nix hash of the unpacked package or the git
+/// checkout. The Nix expression may use `fetchzip` for a naked package, and
+/// then hashes it unpacked, which is why the two can differ.
+fn jsonHash(alloc: std.mem.Allocator, dep: *zon2nix.Dep) ![]const u8 {
+    const nix = dep.nix orelse return error.MissingNixHash;
+    if (std.mem.startsWith(u8, dep.zig_hash, "N-V-")) {
+        if (dep.local) |local| {
+            var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+            _ = try std.fmt.hexToBytes(&digest, local.sha256);
+            return std.fmt.allocPrint(alloc, "sha256-{b64}", .{&digest});
+        }
+    }
+    return alloc.dupe(u8, nix.hash);
+}
 
 /// Where the packages go in a Nix header, and where the packages that need
 /// forking go. Each is a comment line on its own, so that the header is valid

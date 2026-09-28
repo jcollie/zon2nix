@@ -1,0 +1,32 @@
+{
+  "N-V-__8AAOgqbADacob-q2_DMQlmgaG4xKHRuW-6PJ4oJzMZ": {
+    "name": "fontconfig",
+    "url": "https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.3/fontconfig-2.18.3.tar.xz",
+    "hash": "sha256-T3tVSjjN94wDP2ZsiHHzdJ4UoJT2Wgf2MMke0LQ9NeM="
+  },
+  "gobject-0.3.2-Skun7F6HogCMynX2JqeSHS7xr-8pK4ob-qRFIcEasVi3": {
+    "name": "gobject",
+    "url": "https://deps.files.ghostty.org/gobject-2026-07-28-36-1.tar.zst",
+    "hash": "sha256-dyCfm2XjiAk30zccjD6AgKFBdE7IRsJuoqnscfvnWSQ="
+  },
+  "known_folders-0.0.0-Fy-PJiDLAAB98m3uYUzatrTb2mO2fpvwx2zpSroEtfbO": {
+    "name": "known_folders",
+    "url": "https://github.com/ziglibs/known-folders/archive/6da0d0c41b78b9ed2d34fa364fcb81b5ebece6c4.tar.gz",
+    "hash": "sha256-F17Ivvsyyla2CBIh+kImc1O3AtD2yTDAGamzMVbVzuw="
+  },
+  "uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA": {
+    "name": "uucode_git",
+    "url": "git+https://github.com/jacobsandlund/uucode#2826a37a4562284fdacd8fa029d49509cc9bffcd",
+    "hash": "sha256-R5RXW5tWIaDq5JOF2+oWd5YOYOyns6WH7f687WE+b20="
+  },
+  "uucode-0.2.0-ZZjBPuuFVgC8YZ8eld4fOKsZANLIhTFMzULQxhkLi1C7": {
+    "name": "uucode_zip",
+    "url": "https://github.com/jacobsandlund/uucode/archive/9d55524551411b493cca41ca06363625d90aff1e.zip",
+    "hash": "sha256-KZbp/0dlJc5BdxM19ZOXH74WEjEilTvzie/BjT1aYvw="
+  },
+  "N-V-__8AAFdWDwA0ktbNUi9pFBHCRN4weXIgIfCrVjfGxqgA": {
+    "name": "wayland_protocols",
+    "url": "https://deps.files.ghostty.org/N-V-__8AAFdWDwA0ktbNUi9pFBHCRN4weXIgIfCrVjfGxqgA.tar.gz",
+    "hash": "sha256-3S3xSrX0EDgleq7cxLX7msDuAY8/D5SvkJcCjmDTMiM="
+  }
+}
