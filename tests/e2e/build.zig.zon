@@ -1,0 +1,41 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey C. Ollie <jeff@ocjtech.us>
+//
+// SPDX-License-Identifier: MIT
+
+// A manifest for testing zon2nix from end to end, in CI on every platform
+// the flake supports. Between them the dependencies cover every way a
+// package can arrive: an archive in each format Zig unpacks, one without a
+// manifest of its own, a git repository, and a `.path` dependency with
+// dependencies of its own. They are small, and
+// none has dependencies of its own, so the run stays quick.
+.{
+    .name = .e2e,
+    .version = "0.0.0",
+    .fingerprint = 0x61f5117f5a0e2e01,
+    .dependencies = .{
+        // A zip archive.
+        .uucode_zip = .{
+            .url = "https://github.com/jacobsandlund/uucode/archive/9d55524551411b493cca41ca06363625d90aff1e.zip",
+            .hash = "uucode-0.2.0-ZZjBPuuFVgC8YZ8eld4fOKsZANLIhTFMzULQxhkLi1C7",
+        },
+        // A git repository, which still goes through `zig fetch`.
+        .uucode_git = .{
+            .url = "git+https://github.com/jacobsandlund/uucode#2826a37a4562284fdacd8fa029d49509cc9bffcd",
+            .hash = "uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA",
+        },
+        // A .tar.gz.
+        .known_folders = .{
+            .url = "https://github.com/ziglibs/known-folders/archive/6da0d0c41b78b9ed2d34fa364fcb81b5ebece6c4.tar.gz",
+            .hash = "known_folders-0.0.0-Fy-PJiDLAAB98m3uYUzatrTb2mO2fpvwx2zpSroEtfbO",
+        },
+        // A .tar.zst.
+        .gobject = .{
+            .url = "https://deps.files.ghostty.org/gobject-2026-07-28-36-1.tar.zst",
+            .hash = "gobject-0.3.2-Skun7F6HogCMynX2JqeSHS7xr-8pK4ob-qRFIcEasVi3",
+        },
+        .local = .{
+            .path = "local",
+        },
+    },
+    .paths = .{""},
+}

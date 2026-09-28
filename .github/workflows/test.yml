@@ -1,0 +1,67 @@
+# SPDX-FileCopyrightText: © 2026 Jeffrey C. Ollie <jeff@ocjtech.us>
+# SPDX-License-Identifier: MIT
+
+# Runs on GitHub rather than the Forgejo instance because GitHub has macOS
+# runners, and aarch64-darwin is one of the platforms the flake supports.
+# Each job tests on one of those platforms: the unit tests, the package, and
+# zon2nix from end to end, including building the Nix expression it writes.
+
+name: test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      # One platform failing says nothing about the others, so let them all
+      # finish and report.
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runner: macos-15
+
+    name: ${{ matrix.system }}
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check REUSE compliance
+        run: nix develop -c reuse lint
+
+      - name: Check Zig formatting compliance
+        run: nix develop -c zig fmt --check .
+
+      - name: Test
+        run: nix develop -c zig build test --summary all
+
+      # valgrind is only in the devshell on Linux.
+      - name: Test under valgrind
+        if: runner.os == 'Linux'
+        run: nix develop -c zig build test-valgrind
+
+      - name: Build
+        run: nix develop -c zig build
+
+      - name: Build the package
+        run: nix build -L .#zon2nix
+
+      # Needs the network: it fetches every package in tests/e2e, builds the
+      # expression zon2nix writes for them, and checks each against `zig
+      # fetch`.
+      - name: Test from end to end
+        run: nix develop -c tests/e2e/check.sh

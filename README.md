@@ -335,7 +335,24 @@ Common tasks:
 zig build run -- --nix=build.zig.zon.nix   # build and run
 zig build test                             # run the unit tests
 zig build test-valgrind                    # run the tests under valgrind
+tests/e2e/check.sh                         # test from end to end (needs the network)
 ```
+
+`tests/e2e/check.sh` runs zon2nix on `tests/e2e/build.zig.zon`, whose
+dependencies cover an archive in every format, a package without a manifest, a
+git repository and a `.path` dependency. The expression it writes has to match
+`tests/e2e/expected.nix`, has to build, and every package in the result has to
+hash to its own name by `zig fetch`. After changing what zon2nix writes,
+regenerate the expected file and review the difference:
+
+```bash
+zig build && zig-out/bin/zon2nix --nix=tests/e2e/expected.nix tests/e2e/build.zig.zon
+```
+
+All of this, and the build of the package, runs in
+[GitHub Actions](.github/workflows/test.yml) on x86_64 and aarch64 Linux and on
+aarch64 macOS — GitHub rather than the Forgejo instance, for the macOS
+runners.
 
 ## References cited
 

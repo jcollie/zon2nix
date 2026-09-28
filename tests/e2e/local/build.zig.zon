@@ -1,0 +1,25 @@
+// SPDX-FileCopyrightText: 2026 Jeffrey C. Ollie <jeff@ocjtech.us>
+//
+// SPDX-License-Identifier: MIT
+
+// Reached from the manifest above by `.path`, to show that zon2nix follows
+// one. Its two dependencies have no manifests of their own, so Zig names
+// them by placeholder, "N-V-".
+.{
+    .name = .e2e_local,
+    .version = "0.0.0",
+    .fingerprint = 0x5eb722d05a0e2e01,
+    .dependencies = .{
+        // Another .tar.gz, since this one has no manifest.
+        .wayland_protocols = .{
+            .url = "https://deps.files.ghostty.org/N-V-__8AAFdWDwA0ktbNUi9pFBHCRN4weXIgIfCrVjfGxqgA.tar.gz",
+            .hash = "N-V-__8AAFdWDwA0ktbNUi9pFBHCRN4weXIgIfCrVjfGxqgA",
+        },
+        // A .tar.xz.
+        .fontconfig = .{
+            .url = "https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.3/fontconfig-2.18.3.tar.xz",
+            .hash = "N-V-__8AAOgqbADacob-q2_DMQlmgaG4xKHRuW-6PJ4oJzMZ",
+        },
+    },
+    .paths = .{""},
+}
