@@ -230,6 +230,26 @@ a silent attempt to reach the network, and it turns on every
 `systemIntegrationOption` by default, which is usually what a distribution
 build wants. Neither of those comes with the alternatives below.
 
+The second is also a way for a build that worked with fetched packages to
+fail: every integration a dependency offers is switched on, so it looks for a
+system library the derivation does not provide — dvui's `freetype`
+integration looking for the system's `freetype2`, for instance. Turn such an
+integration back off with `-fno-sys=NAME` in `zigBuildFlags`; `zig build
+--help` lists the names under "Available System Integrations". Pipit, which
+builds on dvui, passes:
+
+```nix
+  zigBuildFlags = [
+    "--system"
+    "${callPackage ./build.zig.zon.nix { }}"
+    "-fno-sys=accesskit"
+    "-fno-sys=freetype"
+    "-fno-sys=wio"
+  ];
+```
+
+Or give the derivation the library, and leave the integration on.
+
 #### Dependencies that have `.path` dependencies of their own
 
 On Zig 0.16.0, `zig build --system` never finishes if any fetched package
