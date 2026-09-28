@@ -6,6 +6,8 @@ const TmpDir = @This();
 
 const std = @import("std");
 
+const log = std.log.scoped(.tmpdir);
+
 path: []const u8,
 sub_path: []const u8,
 dir: std.Io.Dir,
@@ -43,7 +45,13 @@ pub fn init(self: *TmpDir, io: std.Io, alloc: std.mem.Allocator, env_map: *std.p
 
 pub fn deinit(self: *TmpDir, io: std.Io, alloc: std.mem.Allocator) void {
     self.dir.close(io);
-    // self.tmp.deleteTree(io, self.sub_path) catch {};
+    // Everything a run downloads and unpacks lands in here -- hundreds of
+    // megabytes for a large project, several gigabytes for some -- and when
+    // TMPDIR is a tmpfs, as it is under `nix develop`, leaving it behind
+    // fills memory a run at a time.
+    self.tmp.deleteTree(io, self.sub_path) catch |err| {
+        log.warn("unable to remove temporary directory {s}: {t}", .{ self.path, err });
+    };
     self.tmp.close(io);
     alloc.free(self.sub_path);
     alloc.free(self.path);

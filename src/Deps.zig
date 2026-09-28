@@ -23,6 +23,9 @@ deps: std.StringArrayHashMapUnmanaged(*Dep),
 
 pub fn init(self: *Deps, io: std.Io, alloc: std.mem.Allocator, env_map: *std.process.Environ.Map) !void {
     try self.tmpdir.init(io, alloc, env_map);
+    // Without this a run that stops here -- no `zig` on PATH, say -- leaves
+    // the directory behind.
+    errdefer self.tmpdir.deinit(io, alloc);
     // create dir structure
     try self.tmpdir.dir.createDir(io, "cache", .default_dir);
     try self.tmpdir.dir.createDir(io, "src", .default_dir);
