@@ -139,6 +139,24 @@ and otherwise the alphabetically first. The Nix hash belongs to the URL that
 was fetched, so a package fetched before a better URL for it turned up is
 fetched again from that one.
 
+### Excluding packages
+
+- `--exclude=NAME` — leave out a dependency, and everything beneath it (may
+  be repeated)
+
+zon2nix follows every dependency, lazy ones included, since it cannot know
+which a build will ask for. That sometimes reaches a package that cannot be
+fetched at all — one whose own manifest uses a hash format the current Zig
+refuses, say — beneath a lazy dependency the project never uses. `--exclude`
+names such a dependency: it is neither fetched nor looked inside, so nothing
+beneath it is either.
+
+`NAME` matches the name a manifest gives a dependency, in any manifest, or its
+package hash. An `--exclude` that matches nothing draws a warning, since it is
+most likely misspelled. If an excluded package turns out to be needed after
+all, `zig build --system` fails naming it, so leaving out too much is not
+silent.
+
 ### Logging options
 
 - `--quiet` — decrease verbosity (may be repeated)
@@ -370,7 +388,9 @@ hash to its own name by `zig fetch`. After changing what zon2nix writes,
 regenerate the expected file and review the difference:
 
 ```bash
-zig build && zig-out/bin/zon2nix --nix=tests/e2e/expected.nix tests/e2e/build.zig.zon
+zig build
+zig-out/bin/zon2nix --exclude excluded --16 --nix=tests/e2e/expected.nix tests/e2e/build.zig.zon
+zig-out/bin/zon2nix --exclude excluded --15 --nix=tests/e2e/expected-0.15.nix tests/e2e/build.zig.zon
 ```
 
 All of this, and the build of the package, runs in

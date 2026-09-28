@@ -30,6 +30,10 @@ trap 'rm -rf "$work"' EXIT
 
 zig build -Doptimize=ReleaseSafe
 
+# The manifest names one dependency that cannot be fetched, which every run
+# has to leave out.
+zon2nix=(zig-out/bin/zon2nix --exclude excluded)
+
 failed=0
 
 # Checks the expression for one Zig version: $1 is the flag that asks for it,
@@ -38,7 +42,7 @@ check() {
   local flag="$1" expected="$2"
 
   echo "== generating with $flag"
-  zig-out/bin/zon2nix "$flag" --nix="$work/generated.nix" "$here/build.zig.zon"
+  "${zon2nix[@]}" "$flag" --nix="$work/generated.nix" "$here/build.zig.zon"
 
   if ! diff -u "$expected" "$work/generated.nix"; then
     echo "the generated expression differs from $expected" >&2
@@ -91,7 +95,7 @@ check() {
 # The JSON is read by tools outside zon2nix, so it has to stay exactly as it
 # was: expected.json was written by zon2nix 0.7.3.
 echo "== generating JSON"
-zig-out/bin/zon2nix --json="$work/generated.json" "$here/build.zig.zon"
+"${zon2nix[@]}" --json="$work/generated.json" "$here/build.zig.zon"
 if ! diff -u "$here/expected.json" "$work/generated.json"; then
   echo "the generated JSON differs from $here/expected.json" >&2
   failed=1

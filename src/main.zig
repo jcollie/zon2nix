@@ -333,6 +333,9 @@ pub fn main(init: std.process.Init) !u8 {
 
     var jobs: usize = default_jobs;
 
+    var excludes: Excludes = .{};
+    defer excludes.deinit(alloc);
+
     {
         var it = try init.minimal.args.iterateAllocator(alloc);
         defer it.deinit();
@@ -383,6 +386,11 @@ pub fn main(init: std.process.Init) !u8 {
 
             if (try getParam("--flatpak", arg, &it)) |param| {
                 flatpak_out = try alloc.dupe(u8, param);
+                continue;
+            }
+
+            if (try getParam("--exclude", arg, &it)) |param| {
+                try excludes.add(alloc, param);
                 continue;
             }
 
@@ -519,6 +527,11 @@ pub fn main(init: std.process.Init) !u8 {
                 const name = entry.key_ptr.*;
                 const zon_dep = entry.value_ptr;
 
+                if (excludes.matches(name, zon_dep.hash)) {
+                    log.info("excluding {s}, named in {s}", .{ name, path });
+                    continue;
+                }
+
                 if (zon_dep.url) |url| {
                     const zig_hash = zon_dep.hash orelse {
                         log.err("hash is missing from {s} in {s}", .{ name, path });
@@ -588,6 +601,12 @@ pub fn main(init: std.process.Init) !u8 {
         );
     }
     if (failed) return 1;
+
+    // An exclusion that never matched is most likely a misspelling, and would
+    // otherwise leave the package it meant to exclude silently included.
+    for (excludes.items.items) |exclude| {
+        if (!exclude.matched) log.warn("--exclude {s} matched no dependency", .{exclude.pattern});
+    }
 
     // Every package now agrees with the URL it will be written out with:
     // the last manifest has been read, so no better one can turn up, and any
@@ -816,6 +835,56 @@ pub fn main(init: std.process.Init) !u8 {
 // fn sortByKey(_: void, lhs: []const u8, rhs: []const u8) bool {
 //     return std.mem.lessThan(u8, lhs, rhs);
 // }
+
+/// The packages named by `--exclude`, which are neither fetched nor looked
+/// inside, so that nothing beneath them is either.
+const Excludes = struct {
+    items: std.ArrayList(struct { pattern: []const u8, matched: bool }) = .empty,
+
+    fn add(self: *Excludes, alloc: std.mem.Allocator, pattern: []const u8) !void {
+        const owned = try alloc.dupe(u8, pattern);
+        errdefer alloc.free(owned);
+        try self.items.append(alloc, .{ .pattern = owned, .matched = false });
+    }
+
+    fn deinit(self: *Excludes, alloc: std.mem.Allocator) void {
+        for (self.items.items) |exclude| alloc.free(exclude.pattern);
+        self.items.deinit(alloc);
+    }
+
+    /// Whether a dependency is excluded: by the name the manifest gives it,
+    /// or by its package hash.
+    fn matches(self: *Excludes, name: []const u8, hash: ?[]const u8) bool {
+        var found = false;
+        for (self.items.items) |*exclude| {
+            if (std.mem.eql(u8, exclude.pattern, name) or
+                (hash != null and std.mem.eql(u8, exclude.pattern, hash.?)))
+            {
+                exclude.matched = true;
+                found = true;
+            }
+        }
+        return found;
+    }
+};
+
+test "Excludes.matches" {
+    const alloc = std.testing.allocator;
+    var excludes: Excludes = .{};
+    defer excludes.deinit(alloc);
+    try excludes.add(alloc, "tree_sitter");
+    try excludes.add(alloc, "N-V-__8AAFdWDwA0ktbNUi9pFBHCRN4weXIgIfCrVjfGxqgA");
+    try excludes.add(alloc, "never_used");
+
+    try std.testing.expect(excludes.matches("tree_sitter", "tree_sitter-0.25.0-AAAA"));
+    try std.testing.expect(!excludes.matches("tree_sitter_json", null));
+    try std.testing.expect(excludes.matches("wayland_protocols", "N-V-__8AAFdWDwA0ktbNUi9pFBHCRN4weXIgIfCrVjfGxqgA"));
+    try std.testing.expect(!excludes.matches("local", null));
+
+    try std.testing.expect(excludes.items.items[0].matched);
+    try std.testing.expect(excludes.items.items[1].matched);
+    try std.testing.expect(!excludes.items.items[2].matched);
+}
 
 /// The hash a package is given in the JSON output, owned by the caller.
 ///

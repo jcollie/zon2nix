@@ -6,8 +6,11 @@
 // the flake supports. Between them the dependencies cover every way a
 // package can arrive: an archive in each format Zig unpacks, one without a
 // manifest of its own, a git repository, and a `.path` dependency with
-// dependencies of its own. They are small, and
-// none has dependencies of its own, so the run stays quick.
+// dependencies of its own. They are small, and none has dependencies of its
+// own, so the run stays quick.
+//
+// One more, `excluded`, cannot be fetched at all. check.sh passes
+// `--exclude excluded`, so the run fails if that stops leaving it out.
 .{
     .name = .e2e,
     .version = "0.0.0",
@@ -35,6 +38,12 @@
         },
         .local = .{
             .path = "local",
+        },
+        // Left out with --exclude: the name is reserved and never resolves.
+        .excluded = .{
+            .url = "https://example.invalid/excluded.tar.gz",
+            .hash = "excluded-0.0.0-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            .lazy = true,
         },
     },
     .paths = .{""},
