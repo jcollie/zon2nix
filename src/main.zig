@@ -22,6 +22,39 @@ const Manifest = struct {
     owner: ?*zon2nix.Dep,
 };
 
+const usage =
+    \\Usage: zon2nix [options] [path ...]
+    \\
+    \\Reads each build.zig.zon named, follows every dependency it declares,
+    \\fetches them to compute the hashes Nix needs, and writes the results.
+    \\With no paths, reads build.zig.zon in the current directory.
+    \\
+    \\Output (each names the file to write; any may be combined):
+    \\  --nix=FILE       a Nix expression that fetches every dependency
+    \\  --json=FILE      a JSON object of each package's name, URL and hash
+    \\  --txt=FILE       the dependency URLs, one per line (computes no hashes)
+    \\  --flatpak=FILE   a flatpak-builder sources array
+    \\
+    \\Zig version of the Nix expression:
+    \\  --16             use zig_0_16 (the default)
+    \\  --15             use zig_0_15
+    \\
+    \\Fetching:
+    \\  --jobs=N         fetch N packages at once (default 8)
+    \\  --exclude=NAME   leave out the dependency named NAME, or whose package
+    \\                   hash is NAME, and everything beneath it (repeatable)
+    \\
+    \\Logging:
+    \\  --quiet          say less (repeatable)
+    \\  --verbose        say more (repeatable)
+    \\  --debug          say everything
+    \\
+    \\  -h, --help       show this and exit
+    \\
+    \\An option taking a value accepts it as --opt=VALUE or --opt VALUE.
+    \\
+;
+
 /// The only file name zon2nix ever reads a manifest from.
 const manifest_name = "build.zig.zon";
 
@@ -344,6 +377,14 @@ pub fn main(init: std.process.Init) !u8 {
         _ = it.next();
 
         while (it.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+                var buffer: [1024]u8 = undefined;
+                var stdout: std.Io.File.Writer = .initStreaming(.stdout(), io, &buffer);
+                stdout.interface.writeAll(usage) catch {};
+                stdout.interface.flush() catch {};
+                return 0;
+            }
+
             if (std.mem.eql(u8, arg, "--verbose")) {
                 verbose = (verbose + 1) % 5;
                 continue;

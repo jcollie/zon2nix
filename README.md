@@ -47,6 +47,8 @@ The general form is:
 zon2nix [options] [path ...]
 ```
 
+`zon2nix --help` lists the options.
+
 Each `path` is a `build.zig.zon` file to process. If no paths are given,
 `zon2nix` looks for `build.zig.zon` in the current directory. Transitive
 dependencies are followed automatically, so you only need to point it at your
