@@ -109,8 +109,19 @@ pub fn fetch(
 ) !void {
     const url = self.fetched_url.?;
     try self.download(io, alloc, tmpdir, http, url);
+
+    // The Nix hash and Zig's view of the package both start from what
+    // `download` left -- or, for a git dependency, each clone the
+    // repository themselves -- and neither needs the other, so they run side
+    // by side. They write different fields of the package.
+    var nix_task = if (want_nix_hashes)
+        io.async(getNixHashes, .{ self, io, alloc, env_map, tmpdir, options })
+    else
+        null;
+    defer if (nix_task) |*task| task.cancel(io) catch {};
+
     self.manifest_path = try self.getBuildZigZon(io, alloc, zigcli, tmpdir);
-    if (want_nix_hashes) try self.getNixHashes(io, alloc, env_map, tmpdir, options);
+    if (nix_task) |*task| try task.await(io);
 }
 
 pub fn deinit(self: *Dep, alloc: std.mem.Allocator) void {
