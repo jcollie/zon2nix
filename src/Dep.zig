@@ -33,6 +33,18 @@ nix: ?struct {
 /// Where this package's own `build.zig.zon` ended up once it was fetched,
 /// or null if it has none. Filled in by `fetch`.
 manifest_path: ?[]const u8,
+/// The URL this package was fetched from, one of the keys of `urls`. Set by
+/// the main thread before the package is handed to a worker, so that the
+/// worker never reads `urls` while the main thread may still be adding to
+/// it. After the last manifest has been read it is made to agree with
+/// `getUrl`, since the Nix hash belongs to the URL that was fetched.
+fetched_url: ?[]const u8,
+/// Whether the package is with a worker right now. Only the main thread
+/// reads or writes it.
+in_flight: bool,
+/// Whether this package's own manifest has been queued to be read, so that
+/// fetching it again from another URL does not read it twice.
+manifest_queued: bool,
 /// What went wrong while fetching this package, if anything. A fetch runs on
 /// a worker whose return value is discarded, so the failure is recorded here
 /// and reported once the round it belongs to has finished.
@@ -60,6 +72,9 @@ pub fn init(
         .names = .empty,
         .urls = .empty,
         .manifest_path = null,
+        .fetched_url = null,
+        .in_flight = false,
+        .manifest_queued = false,
         .fetch_error = null,
         .has_path_dependency = false,
     };
@@ -91,23 +106,15 @@ pub fn fetch(
     want_nix_hashes: bool,
     options: nixpkg.Options,
 ) !void {
-    try self.download(io, alloc, tmpdir, self.getUrl());
+    const url = self.fetched_url.?;
+    try self.download(io, alloc, tmpdir, url);
     self.manifest_path = try self.getBuildZigZon(io, alloc, zigcli, tmpdir);
     if (want_nix_hashes) try self.getNixHashes(io, alloc, env_map, tmpdir, options);
 }
 
 pub fn deinit(self: *Dep, alloc: std.mem.Allocator) void {
     alloc.free(self.zig_hash);
-    if (self.manifest_path) |path| alloc.free(path);
-    if (self.local) |local| {
-        alloc.free(local.path);
-        alloc.free(local.sha256);
-    }
-    if (self.zig) |zig| alloc.free(zig.local_path);
-    if (self.nix) |nix| {
-        alloc.free(nix.hex);
-        alloc.free(nix.b64);
-    }
+    self.forgetFetch(alloc);
     self.deinitNames(alloc);
     self.deinitUrls(alloc);
 }
@@ -142,9 +149,18 @@ pub fn addName(self: *Dep, alloc: std.mem.Allocator, name: []const u8) !void {
     }
 }
 
+/// The name this package is written out under: the alphabetically first of
+/// the names it was reached by. Chosen by a rule rather than by which was
+/// seen first, because packages are fetched as they are found, so the order
+/// they are seen in is down to timing.
 pub fn getName(self: *Dep) []const u8 {
-    if (self.names.entries.len == 0) unreachable;
-    return self.names.entries.get(0).key;
+    const names = self.names.keys();
+    if (names.len == 0) unreachable;
+    var best = names[0];
+    for (names[1..]) |name| {
+        if (std.mem.lessThan(u8, name, best)) best = name;
+    }
+    return best;
 }
 
 pub fn addUrl(self: *Dep, alloc: std.mem.Allocator, url: []const u8) !void {
@@ -161,9 +177,46 @@ pub fn addUrl(self: *Dep, alloc: std.mem.Allocator, url: []const u8) !void {
     }
 }
 
+/// The URL this package is written out with, chosen by a rule for the same
+/// reason as `getName`: an archive over a git repository, since Nix fetches
+/// one far more cheaply than it clones the other, and then the
+/// alphabetically first.
 pub fn getUrl(self: *Dep) []const u8 {
-    if (self.urls.entries.len == 0) unreachable;
-    return self.urls.entries.get(0).key;
+    const urls = self.urls.keys();
+    if (urls.len == 0) unreachable;
+    var best = urls[0];
+    for (urls[1..]) |url| {
+        if (urlLessThan(url, best)) best = url;
+    }
+    return best;
+}
+
+fn urlLessThan(lhs: []const u8, rhs: []const u8) bool {
+    const lhs_git = std.mem.startsWith(u8, lhs, "git+");
+    const rhs_git = std.mem.startsWith(u8, rhs, "git+");
+    if (lhs_git != rhs_git) return rhs_git;
+    return std.mem.lessThan(u8, lhs, rhs);
+}
+
+/// Forgets everything a fetch found, so that the package can be fetched
+/// again from another URL. The manifest has already been read, and is not
+/// read again: the package hash is the same, so its contents are too.
+pub fn forgetFetch(self: *Dep, alloc: std.mem.Allocator) void {
+    if (self.manifest_path) |path| alloc.free(path);
+    if (self.local) |local| {
+        alloc.free(local.path);
+        alloc.free(local.sha256);
+    }
+    if (self.zig) |zig| alloc.free(zig.local_path);
+    if (self.nix) |nix| {
+        alloc.free(nix.hex);
+        alloc.free(nix.b64);
+    }
+    self.manifest_path = null;
+    self.local = null;
+    self.zig = null;
+    self.nix = null;
+    self.fetch_error = null;
 }
 
 pub fn download(
@@ -281,12 +334,11 @@ pub fn getBuildZigZon(
         const local_path = if (self.local) |local|
             try self.unpack(io, alloc, tmpdir, local.path)
         else git: {
-            if (self.urls.entries.len == 0) return error.NoUrl;
             const local_path, const global_path = try zigcli.fetch(
                 io,
                 alloc,
                 tmpdir.dir,
-                self.urls.entries.get(0).key,
+                self.fetched_url.?,
                 self.zig_hash,
                 .{},
             );
@@ -324,7 +376,7 @@ fn unpack(
     errdefer alloc.free(unpacked.root);
 
     if (!std.mem.eql(u8, self.zig_hash, unpacked.hash)) {
-        log.err("hash mismatch for {s}", .{self.getUrl()});
+        log.err("hash mismatch for {s}", .{self.fetched_url.?});
         log.err("expected: {s}", .{self.zig_hash});
         log.err("actual:   {s}", .{unpacked.hash});
         return error.HashMismatch;
@@ -345,10 +397,7 @@ pub fn getNixHashes(
 
     const path = if (self.local) |local| local.path else null;
 
-    const url = url: {
-        if (self.urls.entries.len == 0) return error.NoUrl;
-        break :url self.urls.entries.get(0).key;
-    };
+    const url = self.fetched_url.?;
     const hashes = try nixpkg.fetch(
         io,
         alloc,
@@ -367,4 +416,35 @@ pub fn getNixHashes(
         .hex = hashes.hex,
         .unpack = hashes.unpack,
     };
+}
+
+test "the name and URL written out do not depend on the order they were found in" {
+    const alloc = std.testing.allocator;
+
+    const archive = "https://example.invalid/b.tar.gz";
+    const other_archive = "https://example.invalid/a.tar.gz";
+    const git = "git+https://example.invalid/a.git#0123";
+
+    for ([_][3][]const u8{
+        .{ git, archive, other_archive },
+        .{ archive, other_archive, git },
+        .{ other_archive, git, archive },
+    }, [_][3][]const u8{
+        .{ "zeta", "alpha", "mu" },
+        .{ "mu", "zeta", "alpha" },
+        .{ "alpha", "mu", "zeta" },
+    }) |urls, names| {
+        var dep: Dep = undefined;
+        try dep.init(alloc, names[0], urls[0], "pkg-0.0.0-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+        defer dep.deinit(alloc);
+
+        // `addName` and `addUrl` warn about the duplicate, and the test
+        // runner would count that as a failure.
+        for (urls[1..]) |url| try dep.urls.put(alloc, try alloc.dupe(u8, url), true);
+        for (names[1..]) |name| try dep.names.put(alloc, try alloc.dupe(u8, name), true);
+
+        // An archive beats a git repository even when it sorts later.
+        try std.testing.expectEqualStrings(other_archive, dep.getUrl());
+        try std.testing.expectEqualStrings("alpha", dep.getName());
+    }
 }

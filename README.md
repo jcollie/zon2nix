@@ -106,10 +106,21 @@ another take 4 fetched eight at a time.
 
 - `--jobs=N` — fetch N packages at once (default 8)
 
-Manifests are read one at a time, a level of the dependency graph at a time, so
-what comes out does not depend on `N` — only how long it takes to produce.
-Raising it much past the default tends not to help, since by then the work is
-waiting on whoever is serving the packages rather than on zon2nix.
+A package's own dependencies are started as soon as it has been fetched,
+rather than when everything found alongside it has been, so one slow package
+holds up only what is below it. Raising `N` much past the default tends not to
+help, since by then the work is waiting on whoever is serving the packages
+rather than on zon2nix.
+
+What comes out does not depend on `N`, or on which package happened to finish
+first. That matters when one package is reached more than one way — two
+manifests naming the same package hash by different names, or with different
+URLs, which zon2nix warns about. The name written out is then the
+alphabetically first, and the URL is an archive in preference to a `git+`
+URL, since Nix fetches an archive far more cheaply than it clones a repository,
+and otherwise the alphabetically first. The Nix hash belongs to the URL that
+was fetched, so a package fetched before a better URL for it turned up is
+fetched again from that one.
 
 ### Logging options
 

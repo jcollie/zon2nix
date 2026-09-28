@@ -33,96 +33,190 @@ const manifest_name = "build.zig.zon";
 /// number of connections to whoever is serving the packages.
 const default_jobs: usize = 8;
 
-/// Fetches a round of packages, several at a time.
+/// Fetches packages on a pool of workers while the main thread reads the
+/// manifests they turn up.
 ///
-/// Every worker takes the next package off `round` and does the whole of it,
-/// so a slow one holds up nothing but itself. The packages in a round are
-/// distinct and each worker touches only its own, which is what makes this
-/// safe without a lock: the shared things it reaches -- the allocator, the
-/// temporary directory, the environment -- are threadsafe or read-only.
+/// Only the main thread touches the dependency table and reads manifests, so
+/// neither needs a lock. It hands each package it finds to `todo` as soon as
+/// it finds it, and a worker does the whole of that one package and hands it
+/// back through `done`, which is where the main thread learns there is a new
+/// manifest to read. So a package's dependencies start as soon as it is
+/// finished, rather than when everything else found alongside it is.
+///
+/// A worker reaches nothing shared but the allocator, the temporary
+/// directory and the environment, all threadsafe or read-only, and reads
+/// nothing of its package that the main thread may be changing: the URL it
+/// fetches is fixed before the package is handed over.
 const Fetcher = struct {
     io: std.Io,
     alloc: std.mem.Allocator,
     deps: *zon2nix.Deps,
     env_map: *std.process.Environ.Map,
-    round: []const *zon2nix.Dep,
-    next: std.atomic.Value(usize),
     want_nix_hashes: bool,
     nix_prefetch_git: []const u8,
     nix_prefetch_url: []const u8,
 
-    fn work(self: *Fetcher) std.Io.Cancelable!void {
-        while (true) {
-            const index = self.next.fetchAdd(1, .monotonic);
-            if (index >= self.round.len) return;
+    /// Waiting for a worker.
+    todo: std.Io.Queue(*zon2nix.Dep),
+    /// Finished with, successfully or not, and waiting for the main thread.
+    done: std.Io.Queue(*zon2nix.Dep),
+    todo_buffer: []*zon2nix.Dep,
+    done_buffer: []*zon2nix.Dep,
+    /// Found, but not yet handed over because `todo` was full. The main
+    /// thread never waits to put into `todo` -- only to take from `done` --
+    /// which is what keeps it and the workers from waiting on each other.
+    backlog: std.ArrayList(*zon2nix.Dep),
+    /// Handed to a worker and not yet back. Never more than there are
+    /// workers, so nothing waits in `todo` long enough to go stale.
+    outstanding: usize,
+    /// No worker could be started, so the main thread fetches each package
+    /// itself as it is submitted, and this holds what it has finished.
+    finished: ?std.ArrayList(*zon2nix.Dep),
+    group: std.Io.Group,
+    /// How many workers were started, which may be fewer than asked for.
+    workers: usize,
 
-            const dep = self.round[index];
-            dep.fetch(
-                self.io,
-                self.alloc,
-                &self.deps.tmpdir,
-                &self.deps.zig,
-                self.env_map,
-                self.want_nix_hashes,
-                .{
-                    .nix_prefetch_git = self.nix_prefetch_git,
-                    .nix_prefetch_url = self.nix_prefetch_url,
-                },
-            ) catch |err| {
-                // The group discards what a worker returns, so the failure is
-                // left on the package and reported by the caller.
-                dep.fetch_error = err;
+    fn init(self: *Fetcher, jobs: usize) !void {
+        self.todo_buffer = try self.alloc.alloc(*zon2nix.Dep, jobs);
+        errdefer self.alloc.free(self.todo_buffer);
+        // Each worker holds at most one package, so there is always room for
+        // it to hand that one back.
+        self.done_buffer = try self.alloc.alloc(*zon2nix.Dep, jobs);
+        errdefer self.alloc.free(self.done_buffer);
+
+        self.todo = .init(self.todo_buffer);
+        self.done = .init(self.done_buffer);
+        self.backlog = .empty;
+        self.outstanding = 0;
+        self.finished = null;
+        self.group = .init;
+
+        self.workers = 0;
+        while (self.workers < jobs) : (self.workers += 1) {
+            self.group.concurrent(self.io, work, .{self}) catch |err| switch (err) {
+                error.ConcurrencyUnavailable => break,
             };
         }
+
+        // An Io that will not spawn anything is not an error: the main
+        // thread does it all itself, one package at a time.
+        if (self.workers == 0) self.finished = .empty;
     }
-};
 
-fn fetchRound(
-    io: std.Io,
-    alloc: std.mem.Allocator,
-    deps: *zon2nix.Deps,
-    round: []const *zon2nix.Dep,
-    jobs: usize,
-    env_map: *std.process.Environ.Map,
-    want_nix_hashes: bool,
-    nix_options: struct {
-        nix_prefetch_git: []const u8,
-        nix_prefetch_url: []const u8,
-    },
-) !void {
-    if (round.len == 0) return;
+    fn deinit(self: *Fetcher) void {
+        // Closing `todo` sends the idle workers home, and closing `done`
+        // those that were about to hand something back after an error has
+        // stopped anyone listening.
+        self.todo.close(self.io);
+        self.done.close(self.io);
+        self.group.await(self.io) catch {};
+        self.backlog.deinit(self.alloc);
+        if (self.finished) |*finished| finished.deinit(self.alloc);
+        self.alloc.free(self.todo_buffer);
+        self.alloc.free(self.done_buffer);
+    }
 
-    var fetcher: Fetcher = .{
-        .io = io,
-        .alloc = alloc,
-        .deps = deps,
-        .env_map = env_map,
-        .round = round,
-        .next = .init(0),
-        .want_nix_hashes = want_nix_hashes,
-        .nix_prefetch_git = nix_options.nix_prefetch_git,
-        .nix_prefetch_url = nix_options.nix_prefetch_url,
-    };
-
-    log.debug("fetching {d} package(s), {d} at a time", .{ round.len, jobs });
-
-    var group: std.Io.Group = .init;
-    // Awaited on the way out so that no worker outlives `fetcher`, whatever
-    // happens in between.
-    defer group.await(io) catch {};
-
-    var spawned: usize = 1; // this thread is one of the workers
-    while (spawned < @min(round.len, jobs)) : (spawned += 1) {
-        group.concurrent(io, Fetcher.work, .{&fetcher}) catch |err| switch (err) {
-            // An Io that will not spawn anything is not an error: this thread
-            // does the whole round itself, which is what zon2nix did before
-            // there was a choice.
-            error.ConcurrencyUnavailable => break,
+    fn fetchOne(self: *Fetcher, dep: *zon2nix.Dep) void {
+        log.debug("fetching {s}", .{dep.fetched_url.?});
+        dep.fetch(
+            self.io,
+            self.alloc,
+            &self.deps.tmpdir,
+            &self.deps.zig,
+            self.env_map,
+            self.want_nix_hashes,
+            .{
+                .nix_prefetch_git = self.nix_prefetch_git,
+                .nix_prefetch_url = self.nix_prefetch_url,
+            },
+        ) catch |err| {
+            // Left on the package and reported by the main thread.
+            dep.fetch_error = err;
         };
     }
 
-    try fetcher.work();
-}
+    fn work(self: *Fetcher) std.Io.Cancelable!void {
+        while (true) {
+            const dep = self.todo.getOne(self.io) catch |err| switch (err) {
+                error.Closed => return,
+                error.Canceled => |e| return e,
+            };
+            self.fetchOne(dep);
+            self.done.putOne(self.io, dep) catch |err| switch (err) {
+                error.Closed => return,
+                error.Canceled => |e| return e,
+            };
+        }
+    }
+
+    /// Arranges for `dep` to be fetched. Which of its URLs is settled when it
+    /// is handed to a worker rather than now, since a better one may turn up
+    /// while it waits.
+    fn submit(self: *Fetcher, dep: *zon2nix.Dep) !void {
+        std.debug.assert(!dep.in_flight);
+        dep.in_flight = true;
+        try self.backlog.append(self.alloc, dep);
+    }
+
+    /// Settles the URLs of everything in the backlog, just before it is
+    /// handed over. From then on it is the worker's to read.
+    fn settleUrls(self: *Fetcher) void {
+        for (self.backlog.items) |dep| dep.fetched_url = dep.getUrl();
+    }
+
+    /// Fetches `dep` again if it was fetched from a URL other than the one
+    /// it will be written out with -- which happens when a better one turns
+    /// up after it was started. The Nix hash belongs to the URL fetched, so
+    /// the two have to agree. A package still with a worker is left alone;
+    /// it is looked at again when it comes back.
+    fn refetchIfStale(self: *Fetcher, dep: *zon2nix.Dep) !bool {
+        if (!self.want_nix_hashes or dep.in_flight) return false;
+        const url = dep.getUrl();
+        if (std.mem.eql(u8, url, dep.fetched_url.?)) return false;
+        log.info("fetching {s} again from {s}, the URL it is written out with", .{ dep.zig_hash, url });
+        dep.forgetFetch(self.alloc);
+        try self.submit(dep);
+        return true;
+    }
+
+    /// The next package a worker has finished with, waiting for one if need
+    /// be, or null once nothing is left to fetch.
+    fn next(self: *Fetcher) !?*zon2nix.Dep {
+        self.settleUrls();
+
+        if (self.finished) |*finished| {
+            for (self.backlog.items) |dep| {
+                self.fetchOne(dep);
+                try finished.append(self.alloc, dep);
+            }
+            self.backlog.clearRetainingCapacity();
+            const dep = finished.pop() orelse return null;
+            dep.in_flight = false;
+            return dep;
+        }
+
+        // Hand over only as many as there are idle workers to take them at
+        // once, and without waiting. Anything left behind stays in the
+        // backlog, where its URL can still change.
+        const idle = self.workers - self.outstanding;
+        const offer = self.backlog.items[0..@min(idle, self.backlog.items.len)];
+        const handed = try self.todo.put(self.io, offer, 0);
+        self.outstanding += handed;
+        const rest = self.backlog.items[handed..];
+        std.mem.copyForwards(*zon2nix.Dep, self.backlog.items[0..rest.len], rest);
+        self.backlog.shrinkRetainingCapacity(rest.len);
+
+        if (self.outstanding == 0) {
+            // With nothing in flight, `todo` was empty and took everything.
+            std.debug.assert(self.backlog.items.len == 0);
+            return null;
+        }
+        const dep = try self.done.getOne(self.io);
+        self.outstanding -= 1;
+        dep.in_flight = false;
+        return dep;
+    }
+};
 
 pub const std_options: std.Options = .{
     .logFn = myLogFn,
@@ -358,28 +452,41 @@ pub fn main(init: std.process.Init) !u8 {
         paths_seen.deinit(alloc);
     }
 
-    // The manifests are walked a level at a time: everything in `paths` is
-    // parsed, everything new that it names is fetched at once, and what those
-    // packages contain becomes the next level. Parsing stays on this thread,
-    // so the dependency table needs no locking; only the fetching -- which is
-    // all network and subprocesses -- is spread out.
-    var next_frontier: std.ArrayList(Manifest) = .empty;
-    defer {
-        for (next_frontier.items) |manifest| alloc.free(manifest.path);
-        next_frontier.deinit(alloc);
-    }
-
-    // A package still to be fetched this round.
-    var round: std.ArrayList(*zon2nix.Dep) = .empty;
-    defer round.deinit(alloc);
-
     // if we're not outputting a nix derivation or json, skip fetching the hash
     const want_nix_hashes = nix_out != null or json_out != null or flatpak_out != null;
 
-    while (paths.items.len > 0) {
-        round.clearRetainingCapacity();
+    var fetcher: Fetcher = .{
+        .io = io,
+        .alloc = alloc,
+        .deps = &deps,
+        .env_map = init.environ_map,
+        .want_nix_hashes = want_nix_hashes,
+        .nix_prefetch_git = options.nix_prefetch_git,
+        .nix_prefetch_url = options.nix_prefetch_url,
+        .todo = undefined,
+        .done = undefined,
+        .todo_buffer = undefined,
+        .done_buffer = undefined,
+        .backlog = undefined,
+        .outstanding = undefined,
+        .finished = undefined,
+        .group = undefined,
+        .workers = undefined,
+    };
+    try fetcher.init(jobs);
+    defer fetcher.deinit();
 
-        for (paths.items) |manifest| {
+    // Once anything has failed nothing new is started: the run is going to
+    // fail, and what is already in flight is only waited for so that it can
+    // be reported and cleaned up.
+    var failed = false;
+
+    while (true) {
+        // Read every manifest that is ready. A `.path` dependency is already
+        // on disk, so it is read straight away rather than waiting its turn,
+        // and stays attributed to the package it came out of.
+        while (paths.pop()) |manifest| {
+            defer alloc.free(manifest.path);
             const path = manifest.path;
 
             // if we've already processed a path don't do it again
@@ -418,7 +525,14 @@ pub fn main(init: std.process.Init) !u8 {
                     };
 
                     const found = try deps.get(alloc, name, url, zig_hash);
-                    if (found.is_new) try round.append(alloc, found.dep);
+                    if (failed) continue;
+                    if (found.is_new) {
+                        try fetcher.submit(found.dep);
+                    } else {
+                        // This may have been a better URL for a package
+                        // already fetched.
+                        _ = try fetcher.refetchIfStale(found.dep);
+                    }
                 }
 
                 if (zon_dep.path) |dep_path| {
@@ -445,12 +559,8 @@ pub fn main(init: std.process.Init) !u8 {
                     );
                     errdefer alloc.free(new_path);
 
-                    // A `.path` dependency is already on disk, so it belongs
-                    // to the round being parsed rather than to the one being
-                    // fetched, and stays attributed to the package it came
-                    // out of.
                     log.debug("adding to paths: {s}", .{new_path});
-                    try next_frontier.append(
+                    try paths.append(
                         alloc,
                         .{ .path = new_path, .owner = manifest.owner },
                     );
@@ -458,40 +568,33 @@ pub fn main(init: std.process.Init) !u8 {
             }
         }
 
-        for (paths.items) |manifest| alloc.free(manifest.path);
-        paths.clearRetainingCapacity();
-
-        try fetchRound(
-            io,
-            alloc,
-            &deps,
-            round.items,
-            jobs,
-            init.environ_map,
-            want_nix_hashes,
-            .{
-                .nix_prefetch_git = options.nix_prefetch_git,
-                .nix_prefetch_url = options.nix_prefetch_url,
-            },
-        );
-
-        var failed = false;
-        for (round.items) |dep| {
-            if (dep.fetch_error) |err| {
-                log.err("fetching {s}: {t}", .{ dep.getUrl(), err });
-                failed = true;
-                continue;
-            }
-            const manifest_path = dep.manifest_path orelse continue;
-            log.debug("adding to paths: {s}", .{manifest_path});
-            try next_frontier.append(
-                alloc,
-                .{ .path = try alloc.dupe(u8, manifest_path), .owner = dep },
-            );
+        const dep = try fetcher.next() orelse break;
+        if (dep.fetch_error) |err| {
+            log.err("fetching {s}: {t}", .{ dep.fetched_url.?, err });
+            failed = true;
+            continue;
         }
-        if (failed) return 1;
+        if (failed) continue;
+        // A better URL may have turned up while it was being fetched.
+        if (try fetcher.refetchIfStale(dep)) continue;
+        if (dep.manifest_queued) continue;
+        const manifest_path = dep.manifest_path orelse continue;
+        dep.manifest_queued = true;
+        log.debug("adding to paths: {s}", .{manifest_path});
+        try paths.append(
+            alloc,
+            .{ .path = try alloc.dupe(u8, manifest_path), .owner = dep },
+        );
+    }
+    if (failed) return 1;
 
-        std.mem.swap(std.ArrayList(Manifest), &paths, &next_frontier);
+    // Every package now agrees with the URL it will be written out with:
+    // the last manifest has been read, so no better one can turn up, and any
+    // package that came back stale was sent out again before the loop could
+    // end.
+    if (want_nix_hashes) {
+        var it = deps.iterator();
+        while (it.next()) |dep| std.debug.assert(std.mem.eql(u8, dep.getUrl(), dep.fetched_url.?));
     }
 
     var list: std.ArrayList(*zon2nix.Dep) = .empty;
