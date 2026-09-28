@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Jeffrey C. Ollie <jeff@ocjtech.us>
 # SPDX-License-Identifier: MIT
 
-# Runs on GitHub rather than the Forgejo instance because GitHub has macOS
-# runners, and aarch64-darwin is one of the platforms the flake supports.
-# Each job tests on one of those platforms: the unit tests, the package, and
-# zon2nix from end to end, including building the Nix expression it writes.
+# Runs on GitHub for its aarch64 Linux and macOS runners: the Forgejo
+# instance has only x86_64 Linux, and runs .forgejo/workflows/test.yml there.
+# Each job tests on one of the platforms the flake supports: the unit tests,
+# the package, and zon2nix from end to end, including building the Nix
+# expression it writes.
 
 name: test
 

@@ -361,8 +361,8 @@ zig build && zig-out/bin/zon2nix --nix=tests/e2e/expected.nix tests/e2e/build.zi
 
 All of this, and the build of the package, runs in
 [GitHub Actions](.github/workflows/test.yml) on x86_64 and aarch64 Linux and on
-aarch64 macOS — GitHub rather than the Forgejo instance, for the macOS
-runners.
+aarch64 macOS, and in [Forgejo Actions](.forgejo/workflows/test.yml) on x86_64
+Linux, which is all the Forgejo runners are.
 
 ## References cited
 
