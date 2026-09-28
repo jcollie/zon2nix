@@ -66,7 +66,7 @@ pub fn unpack(
     var archive = try Io.Dir.cwd().openFile(io, archive_path, .{});
     defer archive.close(io);
 
-    const file_type = try FileType.detect(io, archive, archive_path);
+    const file_type = try FileType.detect(archive_path);
 
     const read_buffer = try arena.alloc(u8, 64 * 1024);
     var archive_reader = archive.reader(io, read_buffer);
@@ -162,16 +162,16 @@ const FileType = enum {
     @"tar.zst",
     zip,
 
-    /// By name first, the way `zig fetch` decides for a local file, and by
-    /// content when the name says nothing -- a URL with no extension, which
-    /// Zig would have settled by the server's `Content-Type`.
-    fn detect(io: Io, file: Io.File, path: []const u8) !FileType {
-        if (fromPath(path)) |file_type| return file_type;
-
-        var magic: [512]u8 = undefined;
-        const len = try file.readPositionalAll(io, &magic, 0);
-        return fromMagic(magic[0..len]) orelse {
-            log.err("{s}: not an archive Zig can unpack", .{path});
+    /// By name, the way `zig fetch` decides for a local file.
+    ///
+    /// The contents could say, but the generated Nix expression cannot use
+    /// them: `fetchzip` and `zig fetch` both go by the name too, so a URL
+    /// with no extension would produce an expression that fails to build.
+    /// It is refused here instead, where the reason can be given.
+    fn detect(path: []const u8) !FileType {
+        return fromPath(path) orelse {
+            log.err("{s}: the URL does not end in an archive extension (.tar.gz, .tgz, .tar.xz, .txz, .tar.zst, .tzst, .tar, .zip, .jar)", .{std.fs.path.basename(path)});
+            log.err("the Nix expression zon2nix writes decides how to unpack a package by its extension, and could not unpack this one", .{});
             return error.UnknownFileType;
         };
     }
@@ -187,15 +187,6 @@ const FileType = enum {
         if (ascii.endsWithIgnoreCase(path, ".tar.zst")) return .@"tar.zst";
         if (ascii.endsWithIgnoreCase(path, ".zip")) return .zip;
         if (ascii.endsWithIgnoreCase(path, ".jar")) return .zip;
-        return null;
-    }
-
-    fn fromMagic(bytes: []const u8) ?FileType {
-        if (std.mem.startsWith(u8, bytes, "\x1f\x8b")) return .@"tar.gz";
-        if (std.mem.startsWith(u8, bytes, "\xfd7zXZ\x00")) return .@"tar.xz";
-        if (std.mem.startsWith(u8, bytes, "\x28\xb5\x2f\xfd")) return .@"tar.zst";
-        if (std.mem.startsWith(u8, bytes, "PK\x03\x04")) return .zip;
-        if (bytes.len >= 262 and std.mem.eql(u8, bytes[257..262], "ustar")) return .tar;
         return null;
     }
 };
@@ -469,12 +460,6 @@ test stripRoot {
     try std.testing.expectEqualStrings("src/main.zig", stripRoot("pkg/src/main.zig", "pkg"));
     try std.testing.expectEqualStrings("pkgs/main.zig", stripRoot("pkgs/main.zig", "pkg"));
     try std.testing.expectEqualStrings("main.zig", stripRoot("main.zig", ""));
-}
-
-test "FileType.fromMagic" {
-    try std.testing.expectEqual(FileType.@"tar.gz", FileType.fromMagic("\x1f\x8b\x08\x00").?);
-    try std.testing.expectEqual(FileType.zip, FileType.fromMagic("PK\x03\x04rest").?);
-    try std.testing.expectEqual(@as(?FileType, null), FileType.fromMagic("<!DOCTYPE html>"));
 }
 
 test "Filter.includePath" {

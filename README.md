@@ -99,6 +99,14 @@ nearly all of its time — eight seconds of one core for gettext's 27 MB tarball
 against under half a second to unpack and hash it. A `git+https` dependency
 still goes through `zig fetch`.
 
+An archive's URL has to end in its extension — `.tar.gz` or `.tgz`, `.tar.xz`
+or `.txz`, `.tar.zst` or `.tzst`, `.tar`, or `.zip` or `.jar`. Zig itself can
+also go by the `Content-Type` a server sends, but the Nix expression zon2nix
+writes decides how to unpack a package by its name, so zon2nix refuses a URL
+without one rather than writing an expression that cannot build. A GitHub
+`codeload.github.com/…/tar.gz/<commit>` URL is the usual case; the
+`github.com/…/archive/<commit>.tar.gz` form of it works.
+
 Packages are fetched several at a time. Each one costs a download, the check
 above and a `nix-prefetch-*` run, most of which is waiting, so this is most of
 the wall-clock time of a run: eight dependencies that take 12 seconds one after
