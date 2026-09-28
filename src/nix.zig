@@ -34,20 +34,52 @@ pub fn fetch(
     const style: Style = .init(u.scheme);
 
     return switch (style) {
-        .git => try fetchGit(io, alloc, tmpdir, env_map, url, options),
+        .git => (try fetchGit(io, alloc, tmpdir, env_map, url, .as_committed, options)).hash,
         .http, .file => try fetchPlain(io, alloc, tmpdir, env_map, path, url, options),
         .other => return error.UnsupportedScheme,
     };
 }
 
-fn fetchGit(
+/// How a git repository is checked out before it is hashed.
+pub const Checkout = enum {
+    /// Every file as committed, with no `.gitattributes` applied: no
+    /// line-ending conversion, no filters. That is what Zig reads, so it is
+    /// what the generated expression's `fetchZigGit` checks out too.
+    as_committed,
+    /// An ordinary checkout, which applies `.gitattributes` -- what a plain
+    /// `fetchgit` gives, and what the JSON output's hashes have always been.
+    ordinary,
+};
+
+/// Makes git ignore every `.gitattributes`: attributes are read from git's
+/// built-in empty tree rather than from the checkout. `core.autocrlf` would
+/// convert line endings even without attributes, so it is turned off as
+/// well, in case a user's own configuration turns it on. The generated
+/// expression's `fetchZigGit` sets exactly these; they must stay the same.
+pub const as_committed_env = [_][2][]const u8{
+    .{ "GIT_ATTR_SOURCE", "4b825dc642cb6eb9a060e54bf8d69288fbee4904" },
+    .{ "GIT_CONFIG_COUNT", "1" },
+    .{ "GIT_CONFIG_KEY_0", "core.autocrlf" },
+    .{ "GIT_CONFIG_VALUE_0", "false" },
+};
+
+pub const GitHash = struct {
+    /// In SRI form, owned by the caller.
+    hash: []const u8,
+    /// Whether the checkout holds a `.gitattributes` anywhere -- the only
+    /// case in which the two kinds of checkout can differ.
+    has_gitattributes: bool,
+};
+
+pub fn fetchGit(
     io: std.Io,
     alloc: std.mem.Allocator,
     tmpdir: *TmpDir,
     env_map: *std.process.Environ.Map,
     url: []const u8,
+    checkout: Checkout,
     options: Options,
-) ![]const u8 {
+) !GitHash {
     log.debug("nix fetch git: {s}", .{url});
 
     const stdout = stdout: {
@@ -89,6 +121,9 @@ fn fetchGit(
         try envmap.put("TMP", subdir.path);
         try envmap.put("TEMP", subdir.path);
         try envmap.put("TEMPDIR", subdir.path);
+        if (checkout == .as_committed) {
+            for (as_committed_env) |kv| try envmap.put(kv[0], kv[1]);
+        }
 
         var nix_prefetch_git = std.process.spawn(
             io,
@@ -154,6 +189,7 @@ fn fetchGit(
 
     const Output = struct {
         hash: ?[]const u8,
+        path: ?[]const u8 = null,
     };
     const parsed = try std.json.parseFromSlice(
         Output,
@@ -170,9 +206,22 @@ fn fetchGit(
         var final: [Hash.digest_length]u8 = undefined;
         try decoder.decode(&final, h);
 
-        return try alloc.dupe(u8, hash);
+        const has_gitattributes = if (parsed.value.path) |path| try containsGitattributes(io, alloc, path) else true;
+        return .{ .hash = try alloc.dupe(u8, hash), .has_gitattributes = has_gitattributes };
     }
     return error.HashNotFound;
+}
+
+/// Whether there is a `.gitattributes` anywhere in the checkout at `path`.
+fn containsGitattributes(io: std.Io, alloc: std.mem.Allocator, path: []const u8) !bool {
+    var dir = try std.Io.Dir.openDirAbsolute(io, path, .{ .iterate = true });
+    defer dir.close(io);
+    var walker = try dir.walk(alloc);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        if (std.mem.eql(u8, entry.basename, ".gitattributes")) return true;
+    }
+    return false;
 }
 
 fn collect(io: std.Io, alloc: std.mem.Allocator, file_: ?std.Io.File) ![]const u8 {

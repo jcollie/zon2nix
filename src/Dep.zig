@@ -35,6 +35,11 @@ nix: ?struct {
     /// In SRI form, `sha256-...`.
     hash: []const u8,
 },
+/// For a git package whose checkout holds a `.gitattributes`, the Nix hash of
+/// an ordinary checkout, which applies it. The JSON output gives that, as it
+/// always has, where the Nix expression checks out the files as committed.
+/// Null when the two cannot differ, or when no JSON was asked for.
+json_hash: ?[]const u8,
 /// Where this package's own `build.zig.zon` ended up once it was fetched,
 /// or null if it has none. Filled in by `fetch`.
 manifest_path: ?[]const u8,
@@ -89,6 +94,7 @@ pub fn init(
         .urls = .empty,
         .manifest_path = null,
         .fetched_url = null,
+        .json_hash = null,
         .in_flight = false,
         .manifest_queued = false,
         .fetch_error = null,
@@ -121,6 +127,7 @@ pub fn fetch(
     http: *std.http.Client,
     env_map: *std.process.Environ.Map,
     want_nix_hashes: bool,
+    want_json_hashes: bool,
     options: nixpkg.Options,
 ) !void {
     const url = self.fetched_url.?;
@@ -128,18 +135,30 @@ pub fn fetch(
 
     const local = self.local orelse {
         // A git repository. Zig and Nix each clone it themselves, and
-        // neither needs the other, so the two clones run side by side.
+        // neither needs the other, so the two clones run side by side. Nix
+        // checks out the files as committed, the way Zig reads them.
         var nix_task = if (want_nix_hashes)
-            io.async(nixHash, .{ self, io, alloc, env_map, tmpdir, options })
+            io.async(nixpkg.fetchGit, .{ io, alloc, tmpdir, env_map, url, nixpkg.Checkout.as_committed, options })
         else
             null;
-        defer if (nix_task) |*task| if (task.cancel(io)) |hash| alloc.free(hash) else |_| {};
+        defer if (nix_task) |*task| if (task.cancel(io)) |git| alloc.free(git.hash) else |_| {};
 
         self.manifest_path = try self.getBuildZigZon(io, alloc, zigcli, tmpdir);
         if (nix_task) |*task| {
-            const hash = try task.await(io);
+            const git = try task.await(io);
             nix_task = null;
-            self.nix = .{ .fetcher = .fetchgit, .hash = hash };
+            self.nix = .{ .fetcher = .fetchgit, .hash = git.hash };
+
+            // Only a `.gitattributes` can make an ordinary checkout differ,
+            // so only then is it fetched again for the JSON.
+            if (want_json_hashes and git.has_gitattributes) {
+                const ordinary = try nixpkg.fetchGit(io, alloc, tmpdir, env_map, url, .ordinary, options);
+                if (std.mem.eql(u8, ordinary.hash, git.hash)) {
+                    alloc.free(ordinary.hash);
+                } else {
+                    self.json_hash = ordinary.hash;
+                }
+            }
         }
         return;
     };
@@ -255,10 +274,12 @@ pub fn forgetFetch(self: *Dep, alloc: std.mem.Allocator) void {
     }
     if (self.zig) |zig| alloc.free(zig.local_path);
     if (self.nix) |nix| alloc.free(nix.hash);
+    if (self.json_hash) |hash| alloc.free(hash);
     self.manifest_path = null;
     self.local = null;
     self.zig = null;
     self.nix = null;
+    self.json_hash = null;
     self.fetch_error = null;
 }
 

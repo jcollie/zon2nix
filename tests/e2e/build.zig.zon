@@ -26,6 +26,15 @@
             .url = "git+https://github.com/jacobsandlund/uucode#2826a37a4562284fdacd8fa029d49509cc9bffcd",
             .hash = "uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA",
         },
+        // A git repository whose .gitattributes rewrites a file on checkout
+        // -- examples/win32/build.bat gets CRLF line endings -- where Zig
+        // reads the file as committed, with LF. It brings zig-datetime, also
+        // from git, and, lazily, zigwin32, which is large and which check.sh
+        // leaves out with --exclude.
+        .fluent = .{
+            .url = "git+https://git.jcollie.dev/jeff/zig-fluent.git#93101b427f76619d14cb8d433afc507fd3af0d02",
+            .hash = "fluent-0.1.0-N_WW89PZcABO-GT7Whp6v-AHIGdyypS354Gzy660ujta",
+        },
         // A .tar.gz.
         .known_folders = .{
             .url = "https://github.com/ziglibs/known-folders/archive/6da0d0c41b78b9ed2d34fa364fcb81b5ebece6c4.tar.gz",

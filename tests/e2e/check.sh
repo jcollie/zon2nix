@@ -31,8 +31,9 @@ trap 'rm -rf "$work"' EXIT
 zig build -Doptimize=ReleaseSafe
 
 # The manifest names one dependency that cannot be fetched, which every run
-# has to leave out.
-zon2nix=(zig-out/bin/zon2nix --exclude excluded)
+# has to leave out, and reaches zigwin32, which is too large to be worth
+# fetching here.
+zon2nix=(zig-out/bin/zon2nix --exclude excluded --exclude zigwin32)
 
 failed=0
 
@@ -85,7 +86,7 @@ check() {
   done
 
   local expected_count
-  expected_count="$(grep -cE '^    "[^"]+" = fetch(zip|url|git) \{' "$expected")"
+  expected_count="$(grep -cE '^    "[^"]+" = fetch[A-Za-z]+ \{' "$expected")"
   if [ "$count" -ne "$expected_count" ]; then
     echo "the result holds $count packages where $expected_count were expected" >&2
     failed=1

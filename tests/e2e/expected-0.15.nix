@@ -17,8 +17,40 @@
   linkFarm ? null,
 }:
 let
+  # A git repository, checked out the way Zig reads it: every file as
+  # committed. An ordinary checkout applies the repository's `.gitattributes`,
+  # which can rewrite a file's line endings or run it through a filter, and
+  # the package would then no longer match its hash. Pointing git at its
+  # built-in empty tree for attributes turns them all off, and `core.autocrlf`
+  # is turned off too, since it converts line endings even without them.
+  # zon2nix computes the hash with exactly these settings.
+  fetchZigGit =
+    args:
+    fetchgit (
+      args
+      // {
+        fetchSubmodules = false;
+        preFetch = ''
+          export GIT_ATTR_SOURCE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=false
+        '';
+      }
+    );
+
   # Every package, by the hash Zig knows it by, as Nix fetches it.
   packages = {
+    "datetime-0.0.1-6-va78-AQgA0_OvOrxeem7LnZqCmkjL3AkD9XeT81C4l" = fetchZigGit {
+      name = "datetime";
+      url = "https://git.jcollie.dev/jeff/zig-datetime.git";
+      rev = "b1d225e0548572c88c41a8b551b8397e5e168412";
+      hash = "sha256-PT1j9g9mLRusAf/y+BRfJtCj7FSW0z7nEdHjWkB6V8o=";
+    };
+    "fluent-0.1.0-N_WW89PZcABO-GT7Whp6v-AHIGdyypS354Gzy660ujta" = fetchZigGit {
+      name = "fluent";
+      url = "https://git.jcollie.dev/jeff/zig-fluent.git";
+      rev = "93101b427f76619d14cb8d433afc507fd3af0d02";
+      hash = "sha256-1YHOwuhm0goNBXs2pE+WWMPeqSaPTeTBTxqwlQRFmB8=";
+    };
     "N-V-__8AAOgqbADacob-q2_DMQlmgaG4xKHRuW-6PJ4oJzMZ" = fetchzip {
       name = "fontconfig";
       url = "https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.3/fontconfig-2.18.3.tar.xz";
@@ -35,12 +67,19 @@ let
       url = "https://github.com/ziglibs/known-folders/archive/6da0d0c41b78b9ed2d34fa364fcb81b5ebece6c4.tar.gz";
       hash = "sha256-F17Ivvsyyla2CBIh+kImc1O3AtD2yTDAGamzMVbVzuw=";
     };
-    "uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA" = fetchgit {
+    "N-V-__8AABybDwDd46ZHFqBjb0twea7p9vwNzdSzUHFwA55f" = fetchurl {
+      url = "https://data.iana.org/time-zones/releases/tzcode2026d.tar.gz";
+      hash = "sha256-L1yff+Kea4y4Y1g2Z4hLjOF7CkhTVaBUtZHGvfzYF5E=";
+    };
+    "N-V-__8AAFiAFQDNovBNmFwF3hznlSfpY7KwAN3Jy7rhie29" = fetchurl {
+      url = "https://data.iana.org/time-zones/releases/tzdata2026d.tar.gz";
+      hash = "sha256-DLKqjjM8PcBJutxCoMYfIZh7jNROEH+pALrXZKrMd2c=";
+    };
+    "uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA" = fetchZigGit {
       name = "uucode_git";
       url = "https://github.com/jacobsandlund/uucode";
       rev = "2826a37a4562284fdacd8fa029d49509cc9bffcd";
       hash = "sha256-R5RXW5tWIaDq5JOF2+oWd5YOYOyns6WH7f687WE+b20=";
-      fetchSubmodules = false;
     };
     "uucode-0.2.0-ZZjBPuuFVgC8YZ8eld4fOKsZANLIhTFMzULQxhkLi1C7" = fetchzip {
       name = "uucode_zip";

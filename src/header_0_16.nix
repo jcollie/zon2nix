@@ -17,6 +17,26 @@
   linkFarm ? null,
 }:
 let
+  # A git repository, checked out the way Zig reads it: every file as
+  # committed. An ordinary checkout applies the repository's `.gitattributes`,
+  # which can rewrite a file's line endings or run it through a filter, and
+  # the package would then no longer match its hash. Pointing git at its
+  # built-in empty tree for attributes turns them all off, and `core.autocrlf`
+  # is turned off too, since it converts line endings even without them.
+  # zon2nix computes the hash with exactly these settings.
+  fetchZigGit =
+    args:
+    fetchgit (
+      args
+      // {
+        fetchSubmodules = false;
+        preFetch = ''
+          export GIT_ATTR_SOURCE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=false
+        '';
+      }
+    );
+
   # Every package, by the hash Zig knows it by, as Nix fetches it.
   packages = {
     # @packages@

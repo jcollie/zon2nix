@@ -73,7 +73,8 @@ The `hash` in the JSON is in Nix's SRI form. For a naked package, one whose
 hash begins `N-V-` because it has no manifest of its own, it is the SHA-256 of
 the archive file as downloaded; for any other archive it is the Nix hash of
 the unpacked contents, stripped of their top-level directory, and for a git
-repository the Nix hash of the checkout. Tools outside zon2nix build
+repository the Nix hash of an ordinary checkout, `.gitattributes` applied —
+which the Nix expression's own git hash, taken without them, can differ from. Tools outside zon2nix build
 distribution packages from this file, so that meaning does not change, even
 though the Nix expression now fetches most naked packages unpacked and so
 gives some of them a different hash from the JSON.
@@ -173,7 +174,11 @@ package hash — the layout Zig expects of its unpacked packages.
 
 Each package is fetched by the ordinary nixpkgs fetcher for it: `fetchgit` for
 a git repository, `fetchzip` for an archive with a single top-level directory,
-and `fetchurl` for one without, which `fetchzip` cannot strip. `fetchzip` is
+and `fetchurl` for one without, which `fetchzip` cannot strip. A git repository
+goes through `fetchZigGit`, a `fetchgit` that checks out every file as
+committed, ignoring the repository's `.gitattributes`: an ordinary checkout
+can rewrite a file's line endings, and Zig reads the files as committed, so
+the package would no longer match its hash. `fetchzip` is
 preferred because Nix then hashes the contents rather than the archive, so a
 server regenerating the archive — as GitHub has — does not break the hash. One
 derivation then runs `zig fetch` on every package, several at a time, which

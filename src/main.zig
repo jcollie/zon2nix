@@ -86,6 +86,7 @@ const Fetcher = struct {
     deps: *zon2nix.Deps,
     env_map: *std.process.Environ.Map,
     want_nix_hashes: bool,
+    want_json_hashes: bool,
     nix_prefetch_git: []const u8,
     nix_prefetch_url: []const u8,
 
@@ -159,6 +160,7 @@ const Fetcher = struct {
             &self.deps.http,
             self.env_map,
             self.want_nix_hashes,
+            self.want_json_hashes,
             .{
                 .nix_prefetch_git = self.nix_prefetch_git,
                 .nix_prefetch_url = self.nix_prefetch_url,
@@ -511,6 +513,7 @@ pub fn main(init: std.process.Init) !u8 {
         .deps = &deps,
         .env_map = init.environ_map,
         .want_nix_hashes = want_nix_hashes,
+        .want_json_hashes = json_out != null,
         .nix_prefetch_git = options.nix_prefetch_git,
         .nix_prefetch_url = options.nix_prefetch_url,
         .todo = undefined,
@@ -932,11 +935,13 @@ test "Excludes.matches" {
 /// Tools outside zon2nix build distribution packages from the JSON, so its
 /// hashes keep the meaning they had before the Nix expression chose a fetcher
 /// per archive: for a naked `N-V-` package, the SHA-256 of the archive file;
-/// for anything else, the Nix hash of the unpacked package or the git
-/// checkout. The Nix expression may use `fetchzip` for a naked package, and
-/// then hashes it unpacked, which is why the two can differ.
+/// for anything else, the Nix hash of the unpacked package or of an ordinary
+/// git checkout. The Nix expression may use `fetchzip` for a naked package,
+/// and then hashes it unpacked, and checks a git repository out without its
+/// `.gitattributes`, which is why the two can differ.
 fn jsonHash(alloc: std.mem.Allocator, dep: *zon2nix.Dep) ![]const u8 {
     const nix = dep.nix orelse return error.MissingNixHash;
+    if (dep.json_hash) |hash| return alloc.dupe(u8, hash);
     if (std.mem.startsWith(u8, dep.zig_hash, "N-V-")) {
         if (dep.local) |local| {
             var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
@@ -964,7 +969,12 @@ fn writeNixPackage(alloc: std.mem.Allocator, w: *std.Io.Writer, dep: *zon2nix.De
     const url = dep.getUrl();
 
     try writeNixString(w, dep.zig_hash);
-    try w.print(" = {t} {{\n", .{nix.fetcher});
+    try w.print(" = {s} {{\n", .{switch (nix.fetcher) {
+        .fetchzip => "fetchzip",
+        .fetchurl => "fetchurl",
+        // `fetchgit`, checking out the files as committed; see the header.
+        .fetchgit => "fetchZigGit",
+    }});
     switch (nix.fetcher) {
         .fetchzip => {
             try writeNixAttr(w, "name", dep.getName());
@@ -987,8 +997,6 @@ fn writeNixPackage(alloc: std.mem.Allocator, w: *std.Io.Writer, dep: *zon2nix.De
             try writeNixAttr(w, "url", git.url);
             try writeNixAttr(w, "rev", git.rev);
             try writeNixAttr(w, "hash", nix.hash);
-            // `fetchgit` fetches submodules unless told not to; Zig does not.
-            try w.writeAll("fetchSubmodules = false;\n");
         },
     }
     try w.writeAll("};\n");
