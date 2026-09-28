@@ -127,13 +127,17 @@ fn fetchGit(
         var stderr_task = try io.concurrent(collect, .{ io, alloc, nix_prefetch_git.stderr });
         defer _ = stderr_task.cancel(io) catch {};
 
-        const term = try nix_prefetch_git.wait(io);
-
+        // Both pipes are read to the end before waiting, because `wait`
+        // closes them: waiting first closes a descriptor a reader is still
+        // using, and once another thread has opened something under the same
+        // number the read fails with `IsDir` or `NotOpenForReading`.
         const stdout = try stdout_task.await(io);
         errdefer alloc.free(stdout);
 
         const stderr = try stderr_task.await(io);
         defer alloc.free(stderr);
+
+        const term = try nix_prefetch_git.wait(io);
 
         switch (term) {
             .exited => |status| {
@@ -274,13 +278,17 @@ fn fetchPlain(
         var stderr_task = try io.concurrent(collect, .{ io, alloc, nix_prefetch_url.stderr });
         defer _ = stderr_task.cancel(io) catch {};
 
-        const term = try nix_prefetch_url.wait(io);
-
+        // Both pipes are read to the end before waiting, because `wait`
+        // closes them: waiting first closes a descriptor a reader is still
+        // using, and once another thread has opened something under the same
+        // number the read fails with `IsDir` or `NotOpenForReading`.
         const stdout = try stdout_task.await(io);
         errdefer alloc.free(stdout);
 
         const stderr = try stderr_task.await(io);
         defer alloc.free(stderr);
+
+        const term = try nix_prefetch_url.wait(io);
 
         switch (term) {
             .exited => |status| {
