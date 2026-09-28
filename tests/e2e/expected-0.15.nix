@@ -8,6 +8,13 @@
   zig_0_15,
   zstd,
   name ? "zig-packages",
+  # Accepted and ignored. Expressions from zon2nix before 0.8 built the
+  # packages with `linkFarm`, and some callers override it with a version that
+  # copies, to work around Zig mishandling symlinked package directories
+  # (https://codeberg.org/ziglang/zig/issues/32121). The packages are real
+  # directories now, so the override is not needed, and is taken here only so
+  # that passing it is not an error.
+  linkFarm ? null,
 }:
 let
   # Every package, by the hash Zig knows it by, as Nix fetches it.

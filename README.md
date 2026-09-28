@@ -161,6 +161,11 @@ filters each by its manifest's `.paths`, checks it against its hash, and puts
 it in place as real files; Zig mishandles a package directory that is a
 symlink.
 
+Expressions from zon2nix before 0.8 built the directory with `linkFarm`, and a
+project that worked around the symlinks by passing its own copying `linkFarm`
+to `callPackage` can drop it: the argument is still accepted, so that passing
+it is not an error, but nothing uses it.
+
 Where those packages have to be put depends on the Zig version, because 0.16
 moved them: 0.15 keeps unpacked packages in `p/` under the global cache, while
 0.16 keeps only the fetched tarballs there and unpacks into a `zig-pkg`

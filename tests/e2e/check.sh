@@ -55,7 +55,11 @@ check() {
         flake = builtins.getFlake (toString ./.);
         pkgs = flake.inputs.nixpkgs.legacyPackages.\${builtins.currentSystem};
       in
-      pkgs.callPackage $work/default.nix { }
+      pkgs.callPackage $work/default.nix {
+        # Callers of older expressions override this; it has to be
+        # accepted, and never used.
+        linkFarm = throw \"linkFarm was used\";
+      }
     "
   )"
 
