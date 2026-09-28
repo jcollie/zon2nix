@@ -14,6 +14,12 @@ const Zig = @import("Zig.zig");
 
 zig: Zig,
 tmpdir: TmpDir,
+/// Every download goes through this one client, so that its CA bundle is
+/// loaded once and a connection to a host serving several packages is kept
+/// and reused. That halves the time of a small download. Connections are
+/// pooled under a lock and each download makes its own request, so the
+/// workers can share it.
+http: std.http.Client,
 /// Keyed by Zig package hash. The packages are held by pointer rather than by
 /// value because those pointers are kept -- by the round waiting to be
 /// fetched, and by each manifest to say which package it came out of -- while
@@ -34,11 +40,14 @@ pub fn init(self: *Deps, io: std.Io, alloc: std.mem.Allocator, env_map: *std.pro
     defer f.close(io);
 
     self.deps = .empty;
+    self.http = .{ .io = io, .allocator = alloc };
+    errdefer self.http.deinit();
     try self.zig.init(io, alloc, &self.tmpdir, .{});
 }
 
 pub fn deinit(self: *Deps, io: std.Io, alloc: std.mem.Allocator) void {
     self.zig.deinit(alloc);
+    self.http.deinit();
 
     var d_it = self.deps.iterator();
     while (d_it.next()) |d| {

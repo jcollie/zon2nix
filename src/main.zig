@@ -123,6 +123,7 @@ const Fetcher = struct {
             self.alloc,
             &self.deps.tmpdir,
             &self.deps.zig,
+            &self.deps.http,
             self.env_map,
             self.want_nix_hashes,
             .{

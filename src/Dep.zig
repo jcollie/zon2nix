@@ -102,12 +102,13 @@ pub fn fetch(
     alloc: std.mem.Allocator,
     tmpdir: *TmpDir,
     zigcli: *Zig,
+    http: *std.http.Client,
     env_map: *std.process.Environ.Map,
     want_nix_hashes: bool,
     options: nixpkg.Options,
 ) !void {
     const url = self.fetched_url.?;
-    try self.download(io, alloc, tmpdir, url);
+    try self.download(io, alloc, tmpdir, http, url);
     self.manifest_path = try self.getBuildZigZon(io, alloc, zigcli, tmpdir);
     if (want_nix_hashes) try self.getNixHashes(io, alloc, env_map, tmpdir, options);
 }
@@ -224,6 +225,7 @@ pub fn download(
     io: std.Io,
     alloc: std.mem.Allocator,
     tmpdir: *TmpDir,
+    client: *std.http.Client,
     url: []const u8,
 ) !void {
     log.debug("downloading {s}", .{url});
@@ -250,12 +252,6 @@ pub fn download(
             var hasher_buffer: [1024]u8 = undefined;
             var hasher_writer: std.Io.Writer.Hashed(Hasher) = .initHasher(&file_writer.interface, .init(.{}), &hasher_buffer);
             const writer = &hasher_writer.writer;
-
-            var client = std.http.Client{
-                .io = io,
-                .allocator = alloc,
-            };
-            defer client.deinit();
 
             const status = status: {
                 const result = try client.fetch(.{
