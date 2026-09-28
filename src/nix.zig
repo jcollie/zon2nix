@@ -16,12 +16,10 @@ pub const Options = struct {
     nix_prefetch_url: []const u8 = "nix-prefetch-url",
 };
 
-const Hashes = struct {
-    b64: []const u8,
-    hex: []const u8,
-    unpack: bool,
-};
-
+/// Asks Nix for the hash of a package, in SRI form: the hash of the repository
+/// checkout for a git URL, or of the unpacked archive -- stripped of its one
+/// top-level directory, the way `fetchzip` strips it -- for anything else.
+/// Returned owned by the caller.
 pub fn fetch(
     io: std.Io,
     alloc: std.mem.Allocator,
@@ -29,16 +27,15 @@ pub fn fetch(
     env_map: *std.process.Environ.Map,
     path: ?[]const u8,
     url: []const u8,
-    expected_hash: []const u8,
     options: Options,
-) !Hashes {
+) ![]const u8 {
     const u = try std.Uri.parse(url);
 
     const style: Style = .init(u.scheme);
 
     return switch (style) {
         .git => try fetchGit(io, alloc, tmpdir, env_map, url, options),
-        .http, .file => try fetchPlain(io, alloc, tmpdir, env_map, path, url, expected_hash, options),
+        .http, .file => try fetchPlain(io, alloc, tmpdir, env_map, path, url, options),
         .other => return error.UnsupportedScheme,
     };
 }
@@ -50,7 +47,7 @@ fn fetchGit(
     env_map: *std.process.Environ.Map,
     url: []const u8,
     options: Options,
-) !Hashes {
+) ![]const u8 {
     log.debug("nix fetch git: {s}", .{url});
 
     const stdout = stdout: {
@@ -172,13 +169,8 @@ fn fetchGit(
         if (try decoder.calcSizeForSlice(h) != Hash.digest_length) return error.HashLengthMismatch;
         var final: [Hash.digest_length]u8 = undefined;
         try decoder.decode(&final, h);
-        const hex = std.fmt.bytesToHex(final, .lower);
 
-        return .{
-            .b64 = try alloc.dupe(u8, hash),
-            .hex = try alloc.dupe(u8, &hex),
-            .unpack = true,
-        };
+        return try alloc.dupe(u8, hash);
     }
     return error.HashNotFound;
 }
@@ -204,12 +196,9 @@ fn fetchPlain(
     env_map: *std.process.Environ.Map,
     path_: ?[]const u8,
     url: []const u8,
-    expected_hash: []const u8,
     options: Options,
-) !Hashes {
+) ![]const u8 {
     log.debug("nix fetch plain: {s}", .{url});
-
-    const unpack = !std.mem.startsWith(u8, expected_hash, "N-V-");
 
     const path_or_url = b: {
         if (path_) |path| {
@@ -243,21 +232,13 @@ fn fetchPlain(
         var nix_prefetch_url = std.process.spawn(
             io,
             .{
-                .argv = if (unpack)
-                    &.{
-                        options.nix_prefetch_url,
-                        "--type",
-                        "sha256",
-                        "--unpack",
-                        path_or_url,
-                    }
-                else
-                    &.{
-                        options.nix_prefetch_url,
-                        "--type",
-                        "sha256",
-                        path_or_url,
-                    },
+                .argv = &.{
+                    options.nix_prefetch_url,
+                    "--type",
+                    "sha256",
+                    "--unpack",
+                    path_or_url,
+                },
                 .stdin = .ignore,
                 .stdout = .pipe,
                 .stderr = .pipe,
@@ -308,21 +289,69 @@ fn fetchPlain(
 
     const encoded = std.mem.trim(u8, stdout, &std.ascii.whitespace);
 
-    var hex_buf: [128]u8 = undefined;
-    const raw = try nix32.decode(&hex_buf, encoded);
+    var raw_buf: [128]u8 = undefined;
+    const raw = try nix32.decode(&raw_buf, encoded);
 
-    const hex = try std.fmt.allocPrint(alloc, "{x}", .{raw});
-    errdefer alloc.free(hex);
-
-    const hash = try std.fmt.allocPrint(alloc, "sha256-{b64}", .{raw});
-    errdefer alloc.free(hash);
-
-    return .{
-        .b64 = hash,
-        .hex = hex,
-        .unpack = unpack,
-    };
+    return try std.fmt.allocPrint(alloc, "sha256-{b64}", .{raw});
 }
+
+/// A `git+http` or `git+https` URL split into what `fetchgit` wants: the
+/// repository's URL, with no query, and the revision.
+pub const GitSource = struct {
+    url: []const u8,
+    rev: []const u8,
+
+    /// Both fields are owned by the caller.
+    pub fn parse(alloc: std.mem.Allocator, git_url: []const u8) !GitSource {
+        var uri = try std.Uri.parse(git_url);
+        uri.scheme = std.mem.cutPrefix(u8, uri.scheme, "git+") orelse return error.NotGitUrl;
+
+        var fragment_buf: std.Io.Writer.Allocating = .init(alloc);
+        defer fragment_buf.deinit();
+        const fragment = uri.fragment orelse {
+            log.err("{s} names no commit, so what it fetches can change", .{git_url});
+            return error.GitUrlWithoutRevision;
+        };
+        try fragment.formatFragment(&fragment_buf.writer);
+        const commit = fragment_buf.written();
+
+        // A full commit hash is a revision in its own right; anything else is
+        // taken for a branch, as Zig takes it.
+        const is_commit = commit.len == 40 and for (commit) |c| {
+            if (!std.ascii.isHex(c)) break false;
+        } else true;
+        const rev = if (is_commit)
+            try alloc.dupe(u8, commit)
+        else
+            try std.fmt.allocPrint(alloc, "refs/heads/{s}", .{commit});
+        errdefer alloc.free(rev);
+
+        var url_buf: std.Io.Writer.Allocating = .init(alloc);
+        defer url_buf.deinit();
+        try uri.writeToStream(&url_buf.writer, .{ .scheme = true, .authority = true, .path = true });
+
+        return .{ .url = try url_buf.toOwnedSlice(), .rev = rev };
+    }
+
+    pub fn deinit(self: GitSource, alloc: std.mem.Allocator) void {
+        alloc.free(self.url);
+        alloc.free(self.rev);
+    }
+
+    test parse {
+        const alloc = std.testing.allocator;
+
+        const commit: GitSource = try .parse(alloc, "git+https://git.example.invalid/tls.zig.git?ref=quic#05587bbef303c8e9504fec7d07daeead1d597071");
+        defer commit.deinit(alloc);
+        try std.testing.expectEqualStrings("https://git.example.invalid/tls.zig.git", commit.url);
+        try std.testing.expectEqualStrings("05587bbef303c8e9504fec7d07daeead1d597071", commit.rev);
+
+        const branch: GitSource = try .parse(alloc, "git+http://example.invalid/repo#main");
+        defer branch.deinit(alloc);
+        try std.testing.expectEqualStrings("http://example.invalid/repo", branch.url);
+        try std.testing.expectEqualStrings("refs/heads/main", branch.rev);
+    }
+};
 
 test {
     _ = nix32;

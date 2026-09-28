@@ -39,6 +39,10 @@ pub const Unpacked = struct {
     /// The package hash, in the form a manifest names it:
     /// `name-version-hashplus`.
     hash: []const u8,
+    /// Whether everything in the archive was inside one directory, which
+    /// Zig strips. Nix's `fetchzip` strips it too, and fails on an archive
+    /// that has none, so this decides how the package can be fetched.
+    has_root_dir: bool,
 
     pub fn deinit(self: Unpacked, alloc: std.mem.Allocator) void {
         alloc.free(self.root);
@@ -132,7 +136,7 @@ pub fn unpack(
     errdefer alloc.free(hash);
 
     const root = try std.fs.path.join(alloc, &.{ dest_path, root_rel });
-    return .{ .root = root, .hash = hash };
+    return .{ .root = root, .hash = hash, .has_root_dir = root_rel.len != 0 };
 }
 
 fn missingField(archive_path: []const u8, field: []const u8) error{InvalidManifest} {

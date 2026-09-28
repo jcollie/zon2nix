@@ -142,6 +142,16 @@ The file written by `--nix` is a function suitable for `callPackage`. It
 evaluates to a directory holding one subdirectory per dependency, named by Zig
 package hash — the layout Zig expects of its unpacked packages.
 
+Each package is fetched by the ordinary nixpkgs fetcher for it: `fetchgit` for
+a git repository, `fetchzip` for an archive with a single top-level directory,
+and `fetchurl` for one without, which `fetchzip` cannot strip. `fetchzip` is
+preferred because Nix then hashes the contents rather than the archive, so a
+server regenerating the archive — as GitHub has — does not break the hash. One
+derivation then runs `zig fetch` on every package, several at a time, which
+filters each by its manifest's `.paths`, checks it against its hash, and puts
+it in place as real files; Zig mishandles a package directory that is a
+symlink.
+
 Where those packages have to be put depends on the Zig version, because 0.16
 moved them: 0.15 keeps unpacked packages in `p/` under the global cache, while
 0.16 keeps only the fetched tarballs there and unpacks into a `zig-pkg`

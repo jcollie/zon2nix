@@ -21,7 +21,7 @@ SPDX-License-Identifier = "MIT"
 # Written by zon2nix, so it can hold no header of its own: one added by hand
 # would be lost the next time it is regenerated.
 [[annotations]]
-path = "tests/e2e/expected.nix"
+path = ["tests/e2e/expected.nix", "tests/e2e/expected-0.15.nix"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Jeffrey C. Ollie <jeff@ocjtech.us>"
 SPDX-License-Identifier = "MIT"

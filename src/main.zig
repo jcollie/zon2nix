@@ -665,45 +665,27 @@ pub fn main(init: std.process.Init) !u8 {
         );
         defer stream_to_file.cancel(io) catch {};
 
-        try stdin_writer.interface.writeAll(switch (zig_version) {
+        const template = switch (zig_version) {
             .@"15" => @embedFile("header_0_15.nix"),
             .@"16" => @embedFile("header_0_16.nix"),
-        });
+        };
+        const head, const rest = splitTemplate(template, packages_marker);
+        const middle, const tail = splitTemplate(rest, path_dependencies_marker);
 
-        for (list.items) |dep| {
-            const nix = dep.nix orelse return error.MissingNixHash;
-
-            try stdin_writer.interface.print(
-                \\  {{
-                \\    name = "{[zig_hash]s}";
-                \\    path = fetchZigArtifact {{
-                \\      name = "{[name]s}";
-                \\      url = "{[url]s}";
-                \\      hash = "{[nix_hash]s}";
-                \\      unpack = {[unpack]};
-                \\    }};
-                \\  }}
-                \\
-            , .{
-                .zig_hash = dep.zig_hash,
-                .name = dep.getName(),
-                .url = dep.getUrl(),
-                .nix_hash = nix.b64,
-                .unpack = nix.unpack,
-            });
-        }
-
-        // The second list: packages that declare `.path` dependencies of
-        // their own, which `zig build --system` cannot build on Zig 0.16.0
-        // without forking them.
-        try stdin_writer.interface.writeAll("]\n[\n");
-
+        const w = &stdin_writer.interface;
+        try w.writeAll(head);
+        for (list.items) |dep| try writeNixPackage(alloc, w, dep);
+        try w.writeAll(middle);
+        // Packages that declare `.path` dependencies of their own, which
+        // `zig build --system` cannot build on Zig 0.16.0 without forking
+        // them.
         for (list.items) |dep| {
             if (!dep.has_path_dependency) continue;
-            try stdin_writer.interface.print("  \"{s}\"\n", .{dep.zig_hash});
+            try writeNixString(w, dep.zig_hash);
+            try w.writeByte('\n');
         }
+        try w.writeAll(tail);
 
-        try stdin_writer.interface.writeAll("]\n");
         try stdin_writer.interface.flush();
         stdin.close(io);
         nixfmt.stdin = null;
@@ -741,7 +723,7 @@ pub fn main(init: std.process.Init) !u8 {
                 .zig_hash = dep.zig_hash,
                 .name = dep.getName(),
                 .url = dep.getUrl(),
-                .nix_hash = nix.b64,
+                .nix_hash = nix.hash,
                 .comma = if (index < list.items.len - 1) "," else "",
             });
         }
@@ -833,6 +815,86 @@ pub fn main(init: std.process.Init) !u8 {
 // fn sortByKey(_: void, lhs: []const u8, rhs: []const u8) bool {
 //     return std.mem.lessThan(u8, lhs, rhs);
 // }
+
+/// Where the packages go in a Nix header, and where the packages that need
+/// forking go. Each is a comment line on its own, so that the header is valid
+/// Nix as it stands, and is replaced whole.
+const packages_marker = "    # @packages@\n";
+const path_dependencies_marker = "    # @pathDependencyPackages@\n";
+
+fn splitTemplate(template: []const u8, comptime marker: []const u8) struct { []const u8, []const u8 } {
+    const at = std.mem.find(u8, template, marker) orelse @panic("Nix header is missing " ++ marker);
+    return .{ template[0..at], template[at + marker.len ..] };
+}
+
+/// Writes one package's entry: its hash, and the call that fetches it.
+fn writeNixPackage(alloc: std.mem.Allocator, w: *std.Io.Writer, dep: *zon2nix.Dep) !void {
+    const nix = dep.nix orelse return error.MissingNixHash;
+    const url = dep.getUrl();
+
+    try writeNixString(w, dep.zig_hash);
+    try w.print(" = {t} {{\n", .{nix.fetcher});
+    switch (nix.fetcher) {
+        .fetchzip => {
+            try writeNixAttr(w, "name", dep.getName());
+            try writeNixAttr(w, "url", url);
+            try writeNixAttr(w, "hash", nix.hash);
+            if (std.ascii.endsWithIgnoreCase(url, ".tar.zst") or std.ascii.endsWithIgnoreCase(url, ".tzst")) {
+                try w.writeAll("nativeBuildInputs = [ zstd ];\n");
+            }
+        },
+        .fetchurl => {
+            // No name: Nix names the file after the URL, and `zig fetch`
+            // decides how to unpack it by that name.
+            try writeNixAttr(w, "url", url);
+            try writeNixAttr(w, "hash", nix.hash);
+        },
+        .fetchgit => {
+            const git: zon2nix.nix.GitSource = try .parse(alloc, url);
+            defer git.deinit(alloc);
+            try writeNixAttr(w, "name", dep.getName());
+            try writeNixAttr(w, "url", git.url);
+            try writeNixAttr(w, "rev", git.rev);
+            try writeNixAttr(w, "hash", nix.hash);
+            // `fetchgit` fetches submodules unless told not to; Zig does not.
+            try w.writeAll("fetchSubmodules = false;\n");
+        },
+    }
+    try w.writeAll("};\n");
+}
+
+fn writeNixAttr(w: *std.Io.Writer, name: []const u8, value: []const u8) !void {
+    try w.print("{s} = ", .{name});
+    try writeNixString(w, value);
+    try w.writeAll(";\n");
+}
+
+/// Writes `value` as a Nix string. The URLs and names come from manifests,
+/// so a `"` or `${` in one must not end the string or start an
+/// interpolation.
+fn writeNixString(w: *std.Io.Writer, value: []const u8) !void {
+    try w.writeByte('"');
+    var i: usize = 0;
+    while (i < value.len) : (i += 1) {
+        switch (value[i]) {
+            '"' => try w.writeAll("\\\""),
+            '\\' => try w.writeAll("\\\\"),
+            '\n' => try w.writeAll("\\n"),
+            '\r' => try w.writeAll("\\r"),
+            '\t' => try w.writeAll("\\t"),
+            '$' => try w.writeAll(if (i + 1 < value.len and value[i + 1] == '{') "\\$" else "$"),
+            else => |c| try w.writeByte(c),
+        }
+    }
+    try w.writeByte('"');
+}
+
+test writeNixString {
+    var buf: [128]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try writeNixString(&w, "a\"b\\c${d}$e\n");
+    try std.testing.expectEqualStrings("\"a\\\"b\\\\c\\${d}$e\\n\"", w.buffered());
+}
 
 fn sortByZigHash(_: void, lhs: *zon2nix.Dep, rhs: *zon2nix.Dep) bool {
     const a = lhs.zig_hash;

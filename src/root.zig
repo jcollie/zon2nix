@@ -8,6 +8,7 @@ pub const BuildZigZon = @import("BuildZigZon.zig");
 pub const Dep = @import("Dep.zig");
 pub const Deps = @import("Deps.zig");
 pub const ZigPackage = @import("ZigPackage.zig");
+pub const nix = @import("nix.zig");
 
 pub fn streamer(in: *std.Io.Reader, out: *std.Io.Writer) !void {
     _ = try in.streamRemaining(out);

@@ -24,11 +24,16 @@ local: ?struct {
 /// Where the package was unpacked to, once it has been.
 zig: ?struct {
     local_path: []const u8,
+    /// For an archive, whether everything in it was inside one directory.
+    /// Always true for a git repository, which has no such question.
+    has_root_dir: bool,
 },
+/// How the generated Nix expression fetches this package, and the hash it
+/// gives Nix to check.
 nix: ?struct {
-    b64: []const u8,
-    hex: []const u8,
-    unpack: bool,
+    fetcher: Fetcher,
+    /// In SRI form, `sha256-...`.
+    hash: []const u8,
 },
 /// Where this package's own `build.zig.zon` ended up once it was fetched,
 /// or null if it has none. Filled in by `fetch`.
@@ -56,6 +61,17 @@ fetch_error: ?anyerror,
 has_path_dependency: bool,
 
 const Hasher = std.crypto.hash.sha2.Sha256;
+
+pub const Fetcher = enum {
+    /// An archive with one top-level directory, hashed unpacked. Nix hashes
+    /// it by content, so a server regenerating the archive -- as GitHub has
+    /// -- does not break the hash.
+    fetchzip,
+    /// An archive without one, which `fetchzip` cannot strip and so cannot
+    /// fetch, hashed as the file it is.
+    fetchurl,
+    fetchgit,
+};
 
 pub fn init(
     self: *Dep,
@@ -110,18 +126,36 @@ pub fn fetch(
     const url = self.fetched_url.?;
     try self.download(io, alloc, tmpdir, http, url);
 
-    // The Nix hash and Zig's view of the package both start from what
-    // `download` left -- or, for a git dependency, each clone the
-    // repository themselves -- and neither needs the other, so they run side
-    // by side. They write different fields of the package.
-    var nix_task = if (want_nix_hashes)
-        io.async(getNixHashes, .{ self, io, alloc, env_map, tmpdir, options })
-    else
-        null;
-    defer if (nix_task) |*task| task.cancel(io) catch {};
+    const local = self.local orelse {
+        // A git repository. Zig and Nix each clone it themselves, and
+        // neither needs the other, so the two clones run side by side.
+        var nix_task = if (want_nix_hashes)
+            io.async(nixHash, .{ self, io, alloc, env_map, tmpdir, options })
+        else
+            null;
+        defer if (nix_task) |*task| if (task.cancel(io)) |hash| alloc.free(hash) else |_| {};
 
+        self.manifest_path = try self.getBuildZigZon(io, alloc, zigcli, tmpdir);
+        if (nix_task) |*task| {
+            const hash = try task.await(io);
+            nix_task = null;
+            self.nix = .{ .fetcher = .fetchgit, .hash = hash };
+        }
+        return;
+    };
+
+    // An archive is unpacked first, which is quick, because what it finds
+    // decides whether Nix needs asking at all.
     self.manifest_path = try self.getBuildZigZon(io, alloc, zigcli, tmpdir);
-    if (nix_task) |*task| try task.await(io);
+    if (!want_nix_hashes) return;
+    if (self.zig.?.has_root_dir) {
+        self.nix = .{ .fetcher = .fetchzip, .hash = try self.nixHash(io, alloc, env_map, tmpdir, options) };
+    } else {
+        // The SHA-256 of the file is already known from downloading it.
+        var digest: [Hasher.digest_length]u8 = undefined;
+        _ = try std.fmt.hexToBytes(&digest, local.sha256);
+        self.nix = .{ .fetcher = .fetchurl, .hash = try std.fmt.allocPrint(alloc, "sha256-{b64}", .{&digest}) };
+    }
 }
 
 pub fn deinit(self: *Dep, alloc: std.mem.Allocator) void {
@@ -220,10 +254,7 @@ pub fn forgetFetch(self: *Dep, alloc: std.mem.Allocator) void {
         alloc.free(local.sha256);
     }
     if (self.zig) |zig| alloc.free(zig.local_path);
-    if (self.nix) |nix| {
-        alloc.free(nix.hex);
-        alloc.free(nix.b64);
-    }
+    if (self.nix) |nix| alloc.free(nix.hash);
     self.manifest_path = null;
     self.local = null;
     self.zig = null;
@@ -338,7 +369,7 @@ pub fn getBuildZigZon(
 
         // An archive has already been downloaded, and is unpacked and hashed
         // here. Only a git dependency still goes through `zig fetch`.
-        const local_path = if (self.local) |local|
+        self.zig = if (self.local) |local|
             try self.unpack(io, alloc, tmpdir, local.path)
         else git: {
             const local_path, const global_path = try zigcli.fetch(
@@ -350,10 +381,9 @@ pub fn getBuildZigZon(
                 .{},
             );
             alloc.free(global_path);
-            break :git local_path;
+            break :git .{ .local_path = local_path, .has_root_dir = true };
         };
-        self.zig = .{ .local_path = local_path };
-        break :local_path local_path;
+        break :local_path self.zig.?.local_path;
     };
 
     const path = try std.fs.path.join(alloc, &.{ local_path, "build.zig.zon" });
@@ -365,14 +395,14 @@ pub fn getBuildZigZon(
 }
 
 /// Unpacks a downloaded archive and checks it against the hash the manifest
-/// named it by. Returns the package's root directory, owned by the caller.
+/// named it by.
 fn unpack(
     self: *Dep,
     io: std.Io,
     alloc: std.mem.Allocator,
     tmpdir: *TmpDir,
     archive_path: []const u8,
-) ![]const u8 {
+) !@FieldType(Dep, "zig") {
     log.info("unpacking {s}", .{archive_path});
 
     const subdir = try tmpdir.randomSubdir(io, alloc);
@@ -389,40 +419,20 @@ fn unpack(
         return error.HashMismatch;
     }
 
-    return unpacked.root;
+    return .{ .local_path = unpacked.root, .has_root_dir = unpacked.has_root_dir };
 }
 
-pub fn getNixHashes(
+/// Asks Nix for the hash of the package, owned by the caller.
+fn nixHash(
     self: *Dep,
     io: std.Io,
     alloc: std.mem.Allocator,
     env_map: *std.process.Environ.Map,
     tmpdir: *TmpDir,
     options: nixpkg.Options,
-) !void {
-    if (self.nix) |_| return;
-
+) ![]const u8 {
     const path = if (self.local) |local| local.path else null;
-
-    const url = self.fetched_url.?;
-    const hashes = try nixpkg.fetch(
-        io,
-        alloc,
-        tmpdir,
-        env_map,
-        path,
-        url,
-        self.zig_hash,
-        .{
-            .nix_prefetch_git = options.nix_prefetch_git,
-            .nix_prefetch_url = options.nix_prefetch_url,
-        },
-    );
-    self.nix = .{
-        .b64 = hashes.b64,
-        .hex = hashes.hex,
-        .unpack = hashes.unpack,
-    };
+    return nixpkg.fetch(io, alloc, tmpdir, env_map, path, self.fetched_url.?, options);
 }
 
 test "the name and URL written out do not depend on the order they were found in" {
