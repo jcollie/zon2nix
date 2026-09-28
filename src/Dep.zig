@@ -10,6 +10,7 @@ const log = std.log.scoped(.deps);
 
 const TmpDir = @import("TmpDir.zig");
 const Zig = @import("Zig.zig");
+const ZigPackage = @import("ZigPackage.zig");
 const nixpkg = @import("nix.zig");
 const Style = @import("root.zig").Style;
 
@@ -20,9 +21,9 @@ local: ?struct {
     path: []const u8,
     sha256: []const u8,
 },
+/// Where the package was unpacked to, once it has been.
 zig: ?struct {
     local_path: []const u8,
-    global_path: []const u8,
 },
 nix: ?struct {
     b64: []const u8,
@@ -102,10 +103,7 @@ pub fn deinit(self: *Dep, alloc: std.mem.Allocator) void {
         alloc.free(local.path);
         alloc.free(local.sha256);
     }
-    if (self.zig) |zig| {
-        alloc.free(zig.local_path);
-        alloc.free(zig.global_path);
-    }
+    if (self.zig) |zig| alloc.free(zig.local_path);
     if (self.nix) |nix| {
         alloc.free(nix.hex);
         alloc.free(nix.b64);
@@ -278,26 +276,24 @@ pub fn getBuildZigZon(
             break :local_path z.local_path;
         }
 
-        const path_or_url = path_or_url: {
-            if (self.local) |local| break :path_or_url local.path;
+        // An archive has already been downloaded, and is unpacked and hashed
+        // here. Only a git dependency still goes through `zig fetch`.
+        const local_path = if (self.local) |local|
+            try self.unpack(io, alloc, tmpdir, local.path)
+        else git: {
             if (self.urls.entries.len == 0) return error.NoUrl;
-            break :path_or_url self.urls.entries.get(0).key;
+            const local_path, const global_path = try zigcli.fetch(
+                io,
+                alloc,
+                tmpdir.dir,
+                self.urls.entries.get(0).key,
+                self.zig_hash,
+                .{},
+            );
+            alloc.free(global_path);
+            break :git local_path;
         };
-
-        const local_path, const global_path = try zigcli.fetch(
-            io,
-            alloc,
-            tmpdir.dir,
-            path_or_url,
-            self.zig_hash,
-            .{},
-        );
-        errdefer alloc.free(local_path);
-        errdefer alloc.free(global_path);
-        self.zig = .{
-            .local_path = local_path,
-            .global_path = global_path,
-        };
+        self.zig = .{ .local_path = local_path };
         break :local_path local_path;
     };
 
@@ -307,6 +303,34 @@ pub fn getBuildZigZon(
         return null;
     };
     return path;
+}
+
+/// Unpacks a downloaded archive and checks it against the hash the manifest
+/// named it by. Returns the package's root directory, owned by the caller.
+fn unpack(
+    self: *Dep,
+    io: std.Io,
+    alloc: std.mem.Allocator,
+    tmpdir: *TmpDir,
+    archive_path: []const u8,
+) ![]const u8 {
+    log.info("unpacking {s}", .{archive_path});
+
+    const subdir = try tmpdir.randomSubdir(io, alloc);
+    defer subdir.deinit(io, alloc);
+
+    const unpacked = try ZigPackage.unpack(io, alloc, archive_path, subdir.dir, subdir.path);
+    defer alloc.free(unpacked.hash);
+    errdefer alloc.free(unpacked.root);
+
+    if (!std.mem.eql(u8, self.zig_hash, unpacked.hash)) {
+        log.err("hash mismatch for {s}", .{self.getUrl()});
+        log.err("expected: {s}", .{self.zig_hash});
+        log.err("actual:   {s}", .{unpacked.hash});
+        return error.HashMismatch;
+    }
+
+    return unpacked.root;
 }
 
 pub fn getNixHashes(

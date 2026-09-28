@@ -87,10 +87,22 @@ which the two versions do differently — see below.
 
 ### Fetching
 
-Packages are fetched several at a time. Each one costs a download, a `zig
-fetch` and a `nix-prefetch-*` run, nearly all of which is waiting, so this is
-most of the wall-clock time of a run: eight dependencies that take 12 seconds
-one after another take 4 fetched eight at a time.
+Every package is checked against the hash its manifest names before anything
+is written, so a URL and hash that do not belong together fail the run rather
+than the eventual Nix build. For an archive — a `.tar.gz`, `.tar.xz`,
+`.tar.zst`, `.tar` or `.zip` — zon2nix unpacks it and computes Zig's package
+hash itself, following the same rules as `zig fetch` in Zig 0.16.0: the same
+unpacking, the manifest's `.paths` deciding which files count, and the same
+digest over them. It does not run `zig fetch` for these, because `zig fetch`
+also recompresses every package into its cache at gzip level 9, which is
+nearly all of its time — eight seconds of one core for gettext's 27 MB tarball,
+against under half a second to unpack and hash it. A `git+https` dependency
+still goes through `zig fetch`.
+
+Packages are fetched several at a time. Each one costs a download, the check
+above and a `nix-prefetch-*` run, most of which is waiting, so this is most of
+the wall-clock time of a run: eight dependencies that take 12 seconds one after
+another take 4 fetched eight at a time.
 
 - `--jobs=N` — fetch N packages at once (default 8)
 
@@ -305,6 +317,17 @@ zig build run -- --nix=build.zig.zon.nix   # build and run
 zig build test                             # run the unit tests
 zig build test-valgrind                    # run the tests under valgrind
 ```
+
+## References cited
+
+- Zig Software Foundation. *Zig 0.16.0: src/Package/Fetch.zig* (2026).
+  <https://codeberg.org/ziglang/zig/src/tag/0.16.0/src/Package/Fetch.zig> —
+  how `zig fetch` unpacks an archive, applies a manifest's `.paths`, computes
+  the package hash, and recompresses the package into its cache. zon2nix's
+  archive hashing is a port of it.
+- Zig Software Foundation. *Zig 0.16.0: src/Package.zig* (2026).
+  <https://codeberg.org/ziglang/zig/src/tag/0.16.0/src/Package.zig> — the
+  format of a Zig package hash.
 
 ## License
 

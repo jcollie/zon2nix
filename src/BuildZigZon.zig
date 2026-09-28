@@ -100,6 +100,20 @@ pub fn init(
                 else => return error.Parse,
             }
         }
+        if (std.mem.eql(u8, name, "paths")) {
+            switch (value.get(zoir)) {
+                .array_literal => |elements| {
+                    for (0..elements.len) |element_index| {
+                        switch (elements.at(@intCast(element_index)).get(zoir)) {
+                            .string_literal => |v| try self.paths.append(alloc, try alloc.dupe(u8, v)),
+                            else => return error.Parse,
+                        }
+                    }
+                },
+                .empty_literal => {},
+                else => return error.Parse,
+            }
+        }
         if (std.mem.eql(u8, name, "dependencies")) dep: {
             switch (value.get(zoir)) {
                 .struct_literal => |sl| {
@@ -202,6 +216,8 @@ test "a well formed manifest parses" {
 
     try std.testing.expectEqualStrings("thing", manifest.name.?);
     try std.testing.expectEqualStrings("1.2.3", manifest.version.?);
+    try std.testing.expectEqual(@as(usize, 1), manifest.paths.items.len);
+    try std.testing.expectEqualStrings("build.zig", manifest.paths.items[0]);
     try std.testing.expectEqual(@as(usize, 1), manifest.dependencies.count());
 
     // A lazy dependency is still reported. Nothing here can know which
