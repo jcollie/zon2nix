@@ -34,6 +34,9 @@ nix: ?struct {
     fetcher: Fetcher,
     /// In SRI form, `sha256-...`.
     hash: []const u8,
+    /// For `fetchgit`, the commit the URL resolved to when it was fetched,
+    /// which is what gets pinned: the URL may name a branch or a tag.
+    rev: ?[]const u8 = null,
 },
 /// For a git package whose checkout holds a `.gitattributes`, the Nix hash of
 /// an ordinary checkout, which applies it. The JSON output gives that, as it
@@ -141,18 +144,22 @@ pub fn fetch(
             io.async(nixpkg.fetchGit, .{ io, alloc, tmpdir, env_map, url, nixpkg.Checkout.as_committed, options })
         else
             null;
-        defer if (nix_task) |*task| if (task.cancel(io)) |git| alloc.free(git.hash) else |_| {};
+        defer if (nix_task) |*task| if (task.cancel(io)) |git| {
+            alloc.free(git.hash);
+            alloc.free(git.rev);
+        } else |_| {};
 
         self.manifest_path = try self.getBuildZigZon(io, alloc, zigcli, tmpdir);
         if (nix_task) |*task| {
             const git = try task.await(io);
             nix_task = null;
-            self.nix = .{ .fetcher = .fetchgit, .hash = git.hash };
+            self.nix = .{ .fetcher = .fetchgit, .hash = git.hash, .rev = git.rev };
 
             // Only a `.gitattributes` can make an ordinary checkout differ,
             // so only then is it fetched again for the JSON.
             if (want_json_hashes and git.has_gitattributes) {
                 const ordinary = try nixpkg.fetchGit(io, alloc, tmpdir, env_map, url, .ordinary, options);
+                alloc.free(ordinary.rev);
                 if (std.mem.eql(u8, ordinary.hash, git.hash)) {
                     alloc.free(ordinary.hash);
                 } else {
@@ -273,7 +280,10 @@ pub fn forgetFetch(self: *Dep, alloc: std.mem.Allocator) void {
         alloc.free(local.sha256);
     }
     if (self.zig) |zig| alloc.free(zig.local_path);
-    if (self.nix) |nix| alloc.free(nix.hash);
+    if (self.nix) |nix| {
+        alloc.free(nix.hash);
+        if (nix.rev) |rev| alloc.free(rev);
+    }
     if (self.json_hash) |hash| alloc.free(hash);
     self.manifest_path = null;
     self.local = null;

@@ -34,7 +34,11 @@ pub fn fetch(
     const style: Style = .init(u.scheme);
 
     return switch (style) {
-        .git => (try fetchGit(io, alloc, tmpdir, env_map, url, .as_committed, options)).hash,
+        .git => git: {
+            const git = try fetchGit(io, alloc, tmpdir, env_map, url, .as_committed, options);
+            alloc.free(git.rev);
+            break :git git.hash;
+        },
         .http, .file => try fetchPlain(io, alloc, tmpdir, env_map, path, url, options),
         .other => return error.UnsupportedScheme,
     };
@@ -66,6 +70,10 @@ pub const as_committed_env = [_][2][]const u8{
 pub const GitHash = struct {
     /// In SRI form, owned by the caller.
     hash: []const u8,
+    /// The commit that was checked out, as a full hash, owned by the
+    /// caller. The URL may name a branch or a tag instead, and this is what
+    /// it resolved to.
+    rev: []const u8,
     /// Whether the checkout holds a `.gitattributes` anywhere -- the only
     /// case in which the two kinds of checkout can differ.
     has_gitattributes: bool,
@@ -189,6 +197,7 @@ pub fn fetchGit(
 
     const Output = struct {
         hash: ?[]const u8,
+        rev: ?[]const u8 = null,
         path: ?[]const u8 = null,
     };
     const parsed = try std.json.parseFromSlice(
@@ -206,8 +215,17 @@ pub fn fetchGit(
         var final: [Hash.digest_length]u8 = undefined;
         try decoder.decode(&final, h);
 
+        const rev = parsed.value.rev orelse return error.RevNotFound;
+        if (!isCommit(rev)) return error.RevNotFound;
+
         const has_gitattributes = if (parsed.value.path) |path| try containsGitattributes(io, alloc, path) else true;
-        return .{ .hash = try alloc.dupe(u8, hash), .has_gitattributes = has_gitattributes };
+        const owned_hash = try alloc.dupe(u8, hash);
+        errdefer alloc.free(owned_hash);
+        return .{
+            .hash = owned_hash,
+            .rev = try alloc.dupe(u8, rev),
+            .has_gitattributes = has_gitattributes,
+        };
     }
     return error.HashNotFound;
 }
@@ -344,63 +362,46 @@ fn fetchPlain(
     return try std.fmt.allocPrint(alloc, "sha256-{b64}", .{raw});
 }
 
-/// A `git+http` or `git+https` URL split into what `fetchgit` wants: the
-/// repository's URL, with no query, and the revision.
-pub const GitSource = struct {
-    url: []const u8,
-    rev: []const u8,
+/// Whether `rev` is a full commit hash, as opposed to a branch or a tag.
+pub fn isCommit(rev: []const u8) bool {
+    return rev.len == 40 and for (rev) |c| {
+        if (!std.ascii.isHex(c)) break false;
+    } else true;
+}
 
-    /// Both fields are owned by the caller.
-    pub fn parse(alloc: std.mem.Allocator, git_url: []const u8) !GitSource {
-        var uri = try std.Uri.parse(git_url);
-        uri.scheme = std.mem.cutPrefix(u8, uri.scheme, "git+") orelse return error.NotGitUrl;
+/// The repository URL `fetchgit` wants from a `git+http` or `git+https` URL:
+/// no `git+`, no query, and no fragment. The fragment may name a commit, a
+/// branch or a tag -- anything Zig accepts -- so it is not used here at all;
+/// the commit it resolved to comes from `fetchGit` instead.
+///
+/// Owned by the caller.
+pub fn gitRepositoryUrl(alloc: std.mem.Allocator, git_url: []const u8) ![]const u8 {
+    var uri = try std.Uri.parse(git_url);
+    uri.scheme = std.mem.cutPrefix(u8, uri.scheme, "git+") orelse return error.NotGitUrl;
 
-        var fragment_buf: std.Io.Writer.Allocating = .init(alloc);
-        defer fragment_buf.deinit();
-        const fragment = uri.fragment orelse {
-            log.err("{s} names no commit, so what it fetches can change", .{git_url});
-            return error.GitUrlWithoutRevision;
-        };
-        try fragment.formatFragment(&fragment_buf.writer);
-        const commit = fragment_buf.written();
+    var url_buf: std.Io.Writer.Allocating = .init(alloc);
+    defer url_buf.deinit();
+    try uri.writeToStream(&url_buf.writer, .{ .scheme = true, .authority = true, .path = true });
+    return try url_buf.toOwnedSlice();
+}
 
-        // A full commit hash is a revision in its own right; anything else is
-        // taken for a branch, as Zig takes it.
-        const is_commit = commit.len == 40 and for (commit) |c| {
-            if (!std.ascii.isHex(c)) break false;
-        } else true;
-        const rev = if (is_commit)
-            try alloc.dupe(u8, commit)
-        else
-            try std.fmt.allocPrint(alloc, "refs/heads/{s}", .{commit});
-        errdefer alloc.free(rev);
+test gitRepositoryUrl {
+    const alloc = std.testing.allocator;
 
-        var url_buf: std.Io.Writer.Allocating = .init(alloc);
-        defer url_buf.deinit();
-        try uri.writeToStream(&url_buf.writer, .{ .scheme = true, .authority = true, .path = true });
+    const commit = try gitRepositoryUrl(alloc, "git+https://git.example.invalid/tls.zig.git?ref=quic#05587bbef303c8e9504fec7d07daeead1d597071");
+    defer alloc.free(commit);
+    try std.testing.expectEqualStrings("https://git.example.invalid/tls.zig.git", commit);
 
-        return .{ .url = try url_buf.toOwnedSlice(), .rev = rev };
-    }
+    const tag = try gitRepositoryUrl(alloc, "git+http://example.invalid/repo#4.0.9");
+    defer alloc.free(tag);
+    try std.testing.expectEqualStrings("http://example.invalid/repo", tag);
+}
 
-    pub fn deinit(self: GitSource, alloc: std.mem.Allocator) void {
-        alloc.free(self.url);
-        alloc.free(self.rev);
-    }
-
-    test parse {
-        const alloc = std.testing.allocator;
-
-        const commit: GitSource = try .parse(alloc, "git+https://git.example.invalid/tls.zig.git?ref=quic#05587bbef303c8e9504fec7d07daeead1d597071");
-        defer commit.deinit(alloc);
-        try std.testing.expectEqualStrings("https://git.example.invalid/tls.zig.git", commit.url);
-        try std.testing.expectEqualStrings("05587bbef303c8e9504fec7d07daeead1d597071", commit.rev);
-
-        const branch: GitSource = try .parse(alloc, "git+http://example.invalid/repo#main");
-        defer branch.deinit(alloc);
-        try std.testing.expectEqualStrings("http://example.invalid/repo", branch.url);
-        try std.testing.expectEqualStrings("refs/heads/main", branch.rev);
-    }
-};
+test isCommit {
+    try std.testing.expect(isCommit("05587bbef303c8e9504fec7d07daeead1d597071"));
+    try std.testing.expect(!isCommit("4.0.9"));
+    try std.testing.expect(!isCommit("main"));
+}
 
 test {
     _ = nix32;

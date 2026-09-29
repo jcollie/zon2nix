@@ -829,28 +829,10 @@ pub fn main(init: std.process.Init) !u8 {
                     .comma = if (index < list.items.len - 1) "," else "",
                 });
             } else {
-                const uri = try std.Uri.parse(url[4..]);
-                const commit = commit: {
-                    if (uri.fragment) |fragment| {
-                        var buf: std.Io.Writer.Allocating = .init(alloc);
-                        defer buf.deinit();
-                        try fragment.formatFragment(&buf.writer);
-                        break :commit try buf.toOwnedSlice();
-                    }
-                    log.warn("can't find commit in url {s}", .{url});
-                    continue;
-                };
-                defer alloc.free(commit);
-                const new_url = new_url: {
-                    var buf: std.Io.Writer.Allocating = .init(alloc);
-                    defer buf.deinit();
-                    try uri.writeToStream(&buf.writer, .{
-                        .scheme = true,
-                        .authority = true,
-                        .path = true,
-                    });
-                    break :new_url try buf.toOwnedSlice();
-                };
+                // The commit the URL resolved to, since the URL may name a
+                // branch or a tag and Flatpak wants a commit.
+                const commit = (dep.nix orelse return error.MissingNixHash).rev orelse return error.MissingGitRev;
+                const new_url = try zon2nix.nix.gitRepositoryUrl(alloc, url);
                 defer alloc.free(new_url);
                 try writer.interface.print(
                     \\  {{
@@ -991,11 +973,11 @@ fn writeNixPackage(alloc: std.mem.Allocator, w: *std.Io.Writer, dep: *zon2nix.De
             try writeNixAttr(w, "hash", nix.hash);
         },
         .fetchgit => {
-            const git: zon2nix.nix.GitSource = try .parse(alloc, url);
-            defer git.deinit(alloc);
+            const git_url = try zon2nix.nix.gitRepositoryUrl(alloc, url);
+            defer alloc.free(git_url);
             try writeNixAttr(w, "name", dep.getName());
-            try writeNixAttr(w, "url", git.url);
-            try writeNixAttr(w, "rev", git.rev);
+            try writeNixAttr(w, "url", git_url);
+            try writeNixAttr(w, "rev", nix.rev orelse return error.MissingGitRev);
             try writeNixAttr(w, "hash", nix.hash);
         },
     }
