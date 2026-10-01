@@ -51,7 +51,7 @@ pub fn build(b: *std.Build) void {
 
         const run_cmd = b.addRunArtifact(exe);
         run_cmd.step.dependOn(b.getInstallStep());
-        if (b.args) |args| run_cmd.addArgs(args);
+        run_cmd.addPassthruArgs();
         run_step.dependOn(&run_cmd.step);
     }
 
@@ -116,7 +116,7 @@ pub fn build(b: *std.Build) void {
             "--gen-suppressions=all",
         });
         run_cmd.addArtifactArg(exe);
-        if (b.args) |args| run_cmd.addArgs(args);
+        run_cmd.addPassthruArgs();
 
         run_valgrind_step.dependOn(&run_cmd.step);
     }

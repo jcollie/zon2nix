@@ -274,7 +274,7 @@ fn unpackTarball(io: Io, arena: std.mem.Allocator, reader: *Io.Reader, dest: Io.
             },
             .unsupported_file_type => |i| .{
                 .file_name = i.file_name,
-                .message = try std.fmt.allocPrint(arena, "unsupported file type '{c}'", .{@intFromEnum(i.file_type)}),
+                .message = try std.fmt.allocPrint(arena, "unsupported file type '{c}'", .{@backingInt(i.file_type)}),
             },
             // Only possible with `strip_components` above zero.
             .components_outside_stripped_prefix => unreachable,

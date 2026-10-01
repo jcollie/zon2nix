@@ -9,7 +9,7 @@
   nix,
   nix-prefetch-git,
   nixfmt,
-  zig_0_16,
+  zig,
 }:
 let
 in
@@ -17,7 +17,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   name = "zon2nix";
   src = lib.cleanSource ./.;
   nativeBuildInputs = [
-    zig_0_16
+    zig
   ];
   zigBuildFlags = [
     "-Dnix-prefetch-git=${lib.getExe nix-prefetch-git}"

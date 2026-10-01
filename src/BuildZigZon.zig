@@ -40,11 +40,11 @@ pub fn init(
     const content = content: {
         const content = try reader.allocRemaining(allocator, .unlimited);
         defer allocator.free(content);
-        break :content try allocator.dupeZ(u8, content);
+        break :content try allocator.dupeSentinel(u8, content, 0);
     };
     defer allocator.free(content);
 
-    var ast = try std.zig.Ast.parse(allocator, content, .zon);
+    var ast = try std.zig.Ast.parse(allocator, content, .{ .mode = .zon });
     defer ast.deinit(allocator);
 
     // Neither `Ast.parse` nor `ZonGen.generate` returns an error for a

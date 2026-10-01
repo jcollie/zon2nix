@@ -403,7 +403,7 @@ pub fn getBuildZigZon(
         self.zig = if (self.local) |local|
             try self.unpack(io, alloc, tmpdir, local.path)
         else git: {
-            const local_path, const global_path = try zigcli.fetch(
+            const fetched = try zigcli.fetch(
                 io,
                 alloc,
                 tmpdir.dir,
@@ -411,8 +411,13 @@ pub fn getBuildZigZon(
                 self.zig_hash,
                 .{},
             );
-            alloc.free(global_path);
-            break :git .{ .local_path = local_path, .has_root_dir = true };
+            if (fetched.unpacked) |unpacked| {
+                alloc.free(fetched.archive);
+                break :git .{ .local_path = unpacked, .has_root_dir = true };
+            }
+            // Zig 0.17 left only the tarball it keeps in its global cache.
+            defer alloc.free(fetched.archive);
+            break :git try self.unpack(io, alloc, tmpdir, fetched.archive);
         };
         break :local_path self.zig.?.local_path;
     };

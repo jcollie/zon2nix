@@ -89,13 +89,15 @@ was asked.
 ### Zig version selection
 
 The generated Nix expression uses Zig itself to unpack fetched artifacts, so
-it must reference the matching Zig package from nixpkgs:
+it must reference the matching Zig package:
 
 - `--15` — generated expression uses `zig_0_15`
 - `--16` — generated expression uses `zig_0_16` (default)
+- `--17` — generated expression uses `zig_0_17`, which nixpkgs does not have
+  yet, so the caller has to pass one in — see below
 
 It also decides where the generated packages have to be put at build time,
-which the two versions do differently — see below.
+which the versions do differently — see below.
 
 ### Fetching
 
@@ -109,7 +111,9 @@ digest over them. It does not run `zig fetch` for these, because `zig fetch`
 also recompresses every package into its cache at gzip level 9, which is
 nearly all of its time — eight seconds of one core for gettext's 27 MB tarball,
 against under half a second to unpack and hash it. A `git+https` dependency
-still goes through `zig fetch`.
+still goes through `zig fetch`, using whichever Zig is on the `PATH`; Zig 0.17
+leaves such a package only as a tarball in its cache, which zon2nix then
+unpacks and hashes the same way as any other archive.
 
 An archive's URL has to end in its extension — `.tar.gz` or `.tgz`, `.tar.xz`
 or `.txz`, `.tar.zst` or `.tzst`, `.tar`, or `.zip` or `.jar`. Zig itself can
@@ -193,7 +197,7 @@ it is not an error, but nothing uses it.
 
 Where those packages have to be put depends on the Zig version, because 0.16
 moved them: 0.15 keeps unpacked packages in `p/` under the global cache, while
-0.16 keeps only the fetched tarballs there and unpacks into a `zig-pkg`
+0.16 and 0.17 keep only the fetched tarballs there and unpack into a `zig-pkg`
 directory beside the sources being built.
 
 ### Zig 0.16
@@ -340,6 +344,41 @@ that is itself a symlink into the store resolves `../../.zig-cache` to
 somewhere near the root of the filesystem, and the build fails to spawn a
 generator it has just finished building.
 
+### Zig 0.17
+
+Zig 0.17 takes the packages exactly as 0.16 does, so everything in the
+section above applies — `--system`, `-fno-sys`, the forking of packages with
+`.path` dependencies, and the `zig-pkg` alternative — with `zig_0_17` in
+place of `zig_0_16`.
+
+The difference is that nixpkgs has no `zig_0_17` yet, so `callPackage` cannot
+supply the one the expression asks for, and the caller passes it in. From
+[zig-overlay](https://git.jcollie.dev/jeff/zig-overlay), which packages Zig's
+nightlies:
+
+```nix
+let
+  zigDeps = callPackage ./build.zig.zon.nix {
+    zig_0_17 = zig-overlay.packages.${stdenv.hostPlatform.system}.master;
+  };
+in
+stdenv.mkDerivation (finalAttrs: {
+  # ...
+  nativeBuildInputs = [ zig-overlay.packages.${stdenv.hostPlatform.system}.master ];
+
+  zigBuildFlags = [
+    "--system"
+    "${zigDeps}"
+  ];
+  zigCheckFlags = finalAttrs.zigBuildFlags;
+})
+```
+
+Zig 0.17 runs `zig fetch` in a build runner it compiles the first time it is
+asked, which takes a minute or more of one core, so building the expression
+costs that much more than it does for 0.16. It is paid once per build of the
+expression, not once per package.
+
 ### Zig 0.15
 
 Link the packages into Zig's global cache before building:
@@ -392,7 +431,9 @@ The repository is additionally mirrored at
 ## Development
 
 A development shell with Zig, `nix-prefetch-git`, `nixfmt`, and `valgrind` is
-provided:
+provided. Its Zig is a 0.17 nightly from
+[zig-overlay](https://git.jcollie.dev/jeff/zig-overlay), pinned by
+`flake.lock`, and the package is built with the same one:
 
 ```bash
 nix develop
@@ -410,7 +451,8 @@ tests/e2e/check.sh                         # test from end to end (needs the net
 `tests/e2e/check.sh` runs zon2nix on `tests/e2e/build.zig.zon`, whose
 dependencies cover an archive in every format, a package without a manifest, a
 git repository and a `.path` dependency. The expression it writes has to match
-`tests/e2e/expected.nix`, has to build, and every package in the result has to
+`tests/e2e/expected.nix` (or `expected-0.15.nix` or `expected-0.17.nix`, for
+those versions), has to build, and every package in the result has to
 hash to its own name by `zig fetch`. After changing what zon2nix writes,
 regenerate the expected file and review the difference:
 
@@ -418,6 +460,7 @@ regenerate the expected file and review the difference:
 zig build
 zig-out/bin/zon2nix --exclude excluded --16 --nix=tests/e2e/expected.nix tests/e2e/build.zig.zon
 zig-out/bin/zon2nix --exclude excluded --15 --nix=tests/e2e/expected-0.15.nix tests/e2e/build.zig.zon
+zig-out/bin/zon2nix --exclude excluded --17 --nix=tests/e2e/expected-0.17.nix tests/e2e/build.zig.zon
 ```
 
 All of this, and the build of the package, runs in
@@ -435,6 +478,13 @@ Linux, which is all the Forgejo runners are.
 - Zig Software Foundation. *Zig 0.16.0: src/Package.zig* (2026).
   <https://codeberg.org/ziglang/zig/src/tag/0.16.0/src/Package.zig> — the
   format of a Zig package hash.
+- Zig Software Foundation. *Zig 0.17.0-dev.2375+d8aab4878:
+  lib/compiler/Maker.zig* (2026).
+  <https://codeberg.org/ziglang/zig/src/commit/d8aab4878/lib/compiler/Maker.zig>
+  — `zig fetch` in 0.17: no `--global-cache-dir`, and nothing unpacked
+  outside the global cache's tarball unless `--save` is given; and
+  `zig build --system`, which still takes a directory of unpacked packages
+  named by hash.
 
 ## License
 

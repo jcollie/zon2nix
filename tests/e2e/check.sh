@@ -7,9 +7,10 @@
 # the Nix expression it writes against Nix and Zig themselves:
 #
 #   1. zon2nix writes the expression, which has to match expected.nix -- or,
-#      for Zig 0.15, expected-0.15.nix -- and the JSON, which has to match
-#      expected.json. The hashes do not depend on the platform, so a platform
-#      that computes a different one fails here.
+#      for Zig 0.15 and 0.17, expected-0.15.nix and expected-0.17.nix -- and
+#      the JSON, which has to match expected.json. The hashes do not depend
+#      on the platform, so a platform that computes a different one fails
+#      here.
 #   2. Nix builds it, which fetches and unpacks every package the way a real
 #      build would.
 #   3. Every package in the result is hashed by `zig fetch`, and has to come
@@ -38,9 +39,11 @@ zon2nix=(zig-out/bin/zon2nix --exclude excluded --exclude zigwin32)
 failed=0
 
 # Checks the expression for one Zig version: $1 is the flag that asks for it,
-# $2 the file it has to match.
+# $2 the file it has to match, and $3 any arguments the expression has to be
+# given, as a Nix attribute set.
 check() {
-  local flag="$1" expected="$2"
+  local flag="$1" expected="$2" args="{ }"
+  if [ $# -ge 3 ]; then args="$3"; fi
 
   echo "== generating with $flag"
   "${zon2nix[@]}" "$flag" --nix="$work/generated.nix" "$here/build.zig.zon"
@@ -58,24 +61,29 @@ check() {
     nix build --no-link --print-out-paths --impure --expr "
       let
         flake = builtins.getFlake (toString ./.);
-        pkgs = flake.inputs.nixpkgs.legacyPackages.\${builtins.currentSystem};
+        system = builtins.currentSystem;
+        pkgs = flake.inputs.nixpkgs.legacyPackages.\${system};
       in
-      pkgs.callPackage $work/default.nix {
+      pkgs.callPackage $work/default.nix ({
         # Callers of older expressions override this; it has to be
         # accepted, and never used.
         linkFarm = throw \"linkFarm was used\";
-      }
+      } // $args)
     "
   )"
 
   echo "== checking every package against zig fetch"
-  rm -rf "$work/cache" "$work/src"
+  # Only the packages are cleared out: Zig 0.17 compiles the runner for `zig
+  # fetch` into this cache, which takes a minute or more, and need not do it
+  # again for every version.
+  rm -rf "$work/cache/p" "$work/src"
   mkdir -p "$work/cache/tmp" "$work/src"
   touch "$work/src/build.zig"
   local count=0 package name hash
   for package in "$farm"/*; do
     name="$(basename "$package")"
-    hash="$(cd "$work/src" && zig fetch --global-cache-dir "$work/cache" "$package")"
+    # Zig 0.17's `zig fetch` has no `--global-cache-dir`.
+    hash="$(cd "$work/src" && ZIG_GLOBAL_CACHE_DIR="$work/cache" zig fetch "$package")"
     count=$((count + 1))
     if [ "$hash" = "$name" ]; then
       echo "ok       $name"
@@ -104,5 +112,7 @@ fi
 
 check --16 "$here/expected.nix"
 check --15 "$here/expected-0.15.nix"
+# nixpkgs has no Zig 0.17, so it comes from the overlay this flake builds with.
+check --17 "$here/expected-0.17.nix" "{ zig_0_17 = flake.inputs.zig.packages.\${system}.master; }"
 
 exit "$failed"

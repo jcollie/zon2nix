@@ -11,6 +11,7 @@ const zon2nix = @import("zon2nix");
 pub const ZigVersion = enum {
     @"15",
     @"16",
+    @"17",
 };
 
 /// A `build.zig.zon` still to be visited, and the fetched package it came out
@@ -38,6 +39,7 @@ const usage =
     \\Zig version of the Nix expression:
     \\  --16             use zig_0_16 (the default)
     \\  --15             use zig_0_15
+    \\  --17             use zig_0_17, which the caller has to pass in
     \\
     \\Fetching:
     \\  --jobs=N         fetch N packages at once (default 8)
@@ -412,6 +414,11 @@ pub fn main(init: std.process.Init) !u8 {
                 continue;
             }
 
+            if (std.mem.eql(u8, arg, "--17")) {
+                zig_version = .@"17";
+                continue;
+            }
+
             if (try getParam("--txt", arg, &it)) |param| {
                 txt_out = try alloc.dupe(u8, param);
                 continue;
@@ -731,6 +738,7 @@ pub fn main(init: std.process.Init) !u8 {
         const template = switch (zig_version) {
             .@"15" => @embedFile("header_0_15.nix"),
             .@"16" => @embedFile("header_0_16.nix"),
+            .@"17" => @embedFile("header_0_17.nix"),
         };
         const head, const rest = splitTemplate(template, packages_marker);
         const middle, const tail = splitTemplate(rest, path_dependencies_marker);

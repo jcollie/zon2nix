@@ -42,7 +42,7 @@ pub fn init(self: *Deps, io: std.Io, alloc: std.mem.Allocator, env_map: *std.pro
     self.deps = .empty;
     self.http = .{ .io = io, .allocator = alloc };
     errdefer self.http.deinit();
-    try self.zig.init(io, alloc, &self.tmpdir, .{});
+    try self.zig.init(io, alloc, env_map, &self.tmpdir, .{});
 }
 
 pub fn deinit(self: *Deps, io: std.Io, alloc: std.mem.Allocator) void {

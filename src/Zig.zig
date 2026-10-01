@@ -14,12 +14,21 @@ version_string: []const u8,
 version: std.SemanticVersion,
 global_cache_dir: []const u8,
 root_pkg_dir: []const u8,
+/// The environment `zig` runs in: the caller's, pointed at `global_cache_dir`.
+env_map: std.process.Environ.Map,
 
 pub const Options = struct {
     zig: []const u8 = "zig",
 };
 
-pub fn init(self: *Zig, io: std.Io, alloc: std.mem.Allocator, tmpdir: *TmpDir, options: Options) !void {
+pub fn init(
+    self: *Zig,
+    io: std.Io,
+    alloc: std.mem.Allocator,
+    env_map: *const std.process.Environ.Map,
+    tmpdir: *TmpDir,
+    options: Options,
+) !void {
     {
         // workaround https://codeberg.org/ziglang/zig/issues/31866
         // https://github.com/Cloudef/zig2nix/issues/54
@@ -52,7 +61,7 @@ pub fn init(self: *Zig, io: std.Io, alloc: std.mem.Allocator, tmpdir: *TmpDir, o
 
         switch (zig_env.term) {
             .exited => |status| {
-                if (status == 0) break :stdout try alloc.dupeZ(u8, zig_env.stdout);
+                if (status == 0) break :stdout try alloc.dupeSentinel(u8, zig_env.stdout, 0);
                 return error.GettingZigEnv;
             },
             else => {
@@ -63,12 +72,14 @@ pub fn init(self: *Zig, io: std.Io, alloc: std.mem.Allocator, tmpdir: *TmpDir, o
     defer alloc.free(stdout);
 
     const Env = struct {
-        version: ?[]const u8,
+        version: ?[]const u8 = null,
+        global_cache_dir: ?[]const u8 = null,
     };
 
     const format: enum { zon, json } = if (std.mem.startsWith(u8, stdout, ".{")) .zon else .json;
 
-    const version_string = switch (format) {
+    // Both owned.
+    const version_string: []const u8, const env_cache_dir: ?[]const u8 = switch (format) {
         .zon => zon: {
             const parsed = try std.zon.parse.fromSliceAlloc(
                 Env,
@@ -78,7 +89,7 @@ pub fn init(self: *Zig, io: std.Io, alloc: std.mem.Allocator, tmpdir: *TmpDir, o
                 .{ .ignore_unknown_fields = true },
             );
             defer std.zon.parse.free(alloc, parsed);
-            break :zon try alloc.dupe(u8, parsed.version orelse return error.GettingZigEnv);
+            break :zon try dupeEnv(alloc, parsed);
         },
         .json => json: {
             const parsed = try std.json.parseFromSlice(
@@ -88,14 +99,23 @@ pub fn init(self: *Zig, io: std.Io, alloc: std.mem.Allocator, tmpdir: *TmpDir, o
                 .{ .ignore_unknown_fields = true },
             );
             defer parsed.deinit();
-
-            break :json try alloc.dupe(u8, parsed.value.version orelse return error.GettingZigEnv);
+            break :json try dupeEnv(alloc, parsed.value);
         },
     };
     errdefer alloc.free(version_string);
+    defer if (env_cache_dir) |dir| alloc.free(dir);
     const version: std.SemanticVersion = try .parse(version_string);
 
-    const global_cache_dir = try alloc.dupe(u8, tmpdir.path);
+    // A cache of its own, so that what one run fetched is not mistaken for
+    // what the next one fetches -- except on Zig 0.17, where `zig fetch` runs
+    // in a build runner that it compiles into the global cache the first time,
+    // which takes a minute or more. In a cache of its own every run would pay
+    // that again, so there zon2nix shares Zig's, and checks each package
+    // against its hash itself.
+    const global_cache_dir = if (layoutOf(version) == .archive_only and env_cache_dir != null)
+        try alloc.dupe(u8, env_cache_dir.?)
+    else
+        try alloc.dupe(u8, tmpdir.path);
     errdefer alloc.free(global_cache_dir);
     log.debug("global_cache_dir: {s}", .{global_cache_dir});
 
@@ -104,27 +124,72 @@ pub fn init(self: *Zig, io: std.Io, alloc: std.mem.Allocator, tmpdir: *TmpDir, o
 
     log.debug("root_pkg_dir: {s}", .{root_pkg_dir});
 
+    var zig_env_map = try env_map.clone(alloc);
+    errdefer zig_env_map.deinit();
+    try zig_env_map.put("ZIG_GLOBAL_CACHE_DIR", global_cache_dir);
+
     self.* = .{
         .version_string = version_string,
         .version = version,
         .global_cache_dir = global_cache_dir,
         .root_pkg_dir = root_pkg_dir,
+        .env_map = zig_env_map,
     };
+}
+
+fn dupeEnv(alloc: std.mem.Allocator, env: anytype) !struct { []const u8, ?[]const u8 } {
+    const version = try alloc.dupe(u8, env.version orelse return error.GettingZigEnv);
+    errdefer alloc.free(version);
+    const cache_dir = if (env.global_cache_dir) |dir| try alloc.dupe(u8, dir) else null;
+    return .{ version, cache_dir };
 }
 
 pub fn deinit(self: *Zig, alloc: std.mem.Allocator) void {
     alloc.free(self.version_string);
     alloc.free(self.global_cache_dir);
     alloc.free(self.root_pkg_dir);
+    self.env_map.deinit();
 }
+
+/// Where `zig fetch` leaves the package it fetched.
+pub const Layout = enum {
+    /// Zig 0.15: unpacked, in the global cache's `p/<hash>`.
+    global_dir,
+    /// Zig 0.16: unpacked in `zig-pkg/<hash>` beside the project, and
+    /// compressed in the global cache's `p/<hash>.tar.gz`.
+    local_dir,
+    /// Zig 0.17: only compressed, in the global cache's `p/<hash>.tar.gz`.
+    /// Nothing is unpacked anywhere unless `--save` is given, which wants a
+    /// project to save into.
+    archive_only,
+};
 
 const sixteen = std.SemanticVersion{ .major = 0, .minor = 16, .patch = 0, .pre = "dev" };
+const seventeen = std.SemanticVersion{ .major = 0, .minor = 17, .patch = 0, .pre = "dev" };
 
-pub fn isSixteen(self: *Zig) bool {
-    return self.version.order(sixteen) != .lt;
+pub fn layout(self: *const Zig) Layout {
+    return layoutOf(self.version);
 }
 
-const Paths = std.meta.Tuple(&.{ []const u8, []const u8 });
+fn layoutOf(version: std.SemanticVersion) Layout {
+    if (version.order(seventeen) != .lt) return .archive_only;
+    if (version.order(sixteen) != .lt) return .local_dir;
+    return .global_dir;
+}
+
+/// What `fetch` found, both owned by the caller.
+pub const Fetched = struct {
+    /// The package unpacked, or null if this Zig left it only as `archive`.
+    unpacked: ?[]const u8,
+    /// The package in the global cache: a directory or a tarball, depending
+    /// on the `Layout`.
+    archive: []const u8,
+
+    pub fn deinit(self: Fetched, alloc: std.mem.Allocator) void {
+        if (self.unpacked) |path| alloc.free(path);
+        alloc.free(self.archive);
+    }
+};
 
 pub fn fetch(
     self: *Zig,
@@ -134,32 +199,36 @@ pub fn fetch(
     url: []const u8,
     expected_hash: []const u8,
     options: Options,
-) !Paths {
-    const local_path, const global_path = paths: {
-        if (self.isSixteen()) {
+) !Fetched {
+    const fetched: Fetched = switch (self.layout()) {
+        .global_dir => paths: {
+            const path = try std.fs.path.join(alloc, &.{ self.global_cache_dir, "p", expected_hash });
+            errdefer alloc.free(path);
+            break :paths .{ .unpacked = path, .archive = try alloc.dupe(u8, path) };
+        },
+        .local_dir, .archive_only => |l| paths: {
             const global_filename = try std.fmt.allocPrint(alloc, "{s}.tar.gz", .{expected_hash});
             defer alloc.free(global_filename);
+            const archive = try std.fs.path.join(alloc, &.{ self.global_cache_dir, "p", global_filename });
+            errdefer alloc.free(archive);
             break :paths .{
-                try std.fs.path.join(alloc, &.{ self.root_pkg_dir, expected_hash }),
-                try std.fs.path.join(alloc, &.{ self.global_cache_dir, "p", global_filename }),
+                .unpacked = if (l == .local_dir)
+                    try std.fs.path.join(alloc, &.{ self.root_pkg_dir, expected_hash })
+                else
+                    null,
+                .archive = archive,
             };
-        } else {
-            break :paths .{
-                try std.fs.path.join(alloc, &.{ self.global_cache_dir, "p", expected_hash }),
-                try std.fs.path.join(alloc, &.{ self.global_cache_dir, "p", expected_hash }),
-            };
-        }
+        },
     };
-    errdefer alloc.free(local_path);
-    errdefer alloc.free(global_path);
-    log.debug("local_path: {s}", .{local_path});
-    log.debug("global_path: {s}", .{global_path});
+    errdefer fetched.deinit(alloc);
+    if (fetched.unpacked) |path| log.debug("unpacked: {s}", .{path});
+    log.debug("archive: {s}", .{fetched.archive});
 
     // if the cache dir already exists don't download it again
     check: {
-        std.Io.Dir.accessAbsolute(io, local_path, .{}) catch break :check;
-        std.Io.Dir.accessAbsolute(io, global_path, .{}) catch break :check;
-        return .{ local_path, global_path };
+        if (fetched.unpacked) |path| std.Io.Dir.accessAbsolute(io, path, .{}) catch break :check;
+        std.Io.Dir.accessAbsolute(io, fetched.archive, .{}) catch break :check;
+        return fetched;
     }
 
     const stdout = zig_fetch: {
@@ -175,13 +244,14 @@ pub fn fetch(
                 .argv = &.{
                     options.zig,
                     "fetch",
-                    "--global-cache-dir",
-                    self.global_cache_dir,
                     url,
                 },
                 .cwd = .{
                     .dir = tmpdir,
                 },
+                // Zig 0.17 has no `--global-cache-dir` for `zig fetch`, and
+                // every version reads this.
+                .environ_map = &self.env_map,
             },
         );
         defer {
@@ -214,8 +284,8 @@ pub fn fetch(
     }
 
     // insurance
-    try std.Io.Dir.accessAbsolute(io, local_path, .{});
-    try std.Io.Dir.accessAbsolute(io, global_path, .{});
+    if (fetched.unpacked) |path| try std.Io.Dir.accessAbsolute(io, path, .{});
+    try std.Io.Dir.accessAbsolute(io, fetched.archive, .{});
 
-    return .{ local_path, global_path };
+    return fetched;
 }
