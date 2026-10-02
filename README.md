@@ -279,9 +279,9 @@ check there to say so.
 This appears to be fixed in Zig after 0.16.0: the restructuring that moved
 `zig build` out of the compiler and into `lib/compiler/Maker.zig` gave the
 system package directory a field of its own instead of aliasing it onto the
-global cache, so both passes now hash against the same directory. Worth
-re-testing when 0.17 arrives — if it is fixed there, the forking below becomes
-dead weight for anyone building with it.
+global cache, so both passes now hash against the same directory. It has not
+yet been re-tested against the 0.17.0 release — if it is fixed there, the
+forking below is dead weight for anyone building with it.
 
 Forking the offending package past the farm gets `--system` working again,
 because a forked package is rooted outside the farm and both hashes then agree.
@@ -353,18 +353,19 @@ place of `zig_0_16`.
 
 The difference is that nixpkgs has no `zig_0_17` yet, so `callPackage` cannot
 supply the one the expression asks for, and the caller passes it in. From
-[zig-overlay](https://git.jcollie.dev/jeff/zig-overlay), which packages Zig's
-nightlies:
+[zig-overlay](https://git.jcollie.dev/jeff/zig-overlay), which lists the 0.17.0
+release among its nightlies, under the date it was published, rather than as a
+`0.17.0` of its own — and whose `master` moves on to the 0.18 nightlies:
 
 ```nix
 let
   zigDeps = callPackage ./build.zig.zon.nix {
-    zig_0_17 = zig-overlay.packages.${stdenv.hostPlatform.system}.master;
+    zig_0_17 = zig-overlay.packages.${stdenv.hostPlatform.system}."master-2026-10-01";
   };
 in
 stdenv.mkDerivation (finalAttrs: {
   # ...
-  nativeBuildInputs = [ zig-overlay.packages.${stdenv.hostPlatform.system}.master ];
+  nativeBuildInputs = [ zig-overlay.packages.${stdenv.hostPlatform.system}."master-2026-10-01" ];
 
   zigBuildFlags = [
     "--system"
@@ -431,9 +432,9 @@ The repository is additionally mirrored at
 ## Development
 
 A development shell with Zig, `nix-prefetch-git`, `nixfmt`, and `valgrind` is
-provided. Its Zig is a 0.17 nightly from
-[zig-overlay](https://git.jcollie.dev/jeff/zig-overlay), pinned by
-`flake.lock`, and the package is built with the same one:
+provided. Its Zig is the 0.17.0 release from
+[zig-overlay](https://git.jcollie.dev/jeff/zig-overlay), and the package is
+built with the same one:
 
 ```bash
 nix develop
@@ -478,13 +479,16 @@ Linux, which is all the Forgejo runners are.
 - Zig Software Foundation. *Zig 0.16.0: src/Package.zig* (2026).
   <https://codeberg.org/ziglang/zig/src/tag/0.16.0/src/Package.zig> — the
   format of a Zig package hash.
-- Zig Software Foundation. *Zig 0.17.0-dev.2375+d8aab4878:
-  lib/compiler/Maker.zig* (2026).
-  <https://codeberg.org/ziglang/zig/src/commit/d8aab4878/lib/compiler/Maker.zig>
+- Zig Software Foundation. *Zig 0.17.0: lib/compiler/Maker.zig* (2026).
+  <https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler/Maker.zig>
   — `zig fetch` in 0.17: no `--global-cache-dir`, and nothing unpacked
   outside the global cache's tarball unless `--save` is given; and
   `zig build --system`, which still takes a directory of unpacked packages
   named by hash.
+- Zig Software Foundation. *Zig 0.17.0: lib/std/zon/parse.zig* (2026).
+  <https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/std/zon/parse.zig> —
+  `fromZoir`, whose `node` option is never passed on, so it always parses from
+  the root; which is why zon2nix reads each dependency's fields itself.
 
 ## License
 

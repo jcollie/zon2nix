@@ -81,14 +81,16 @@ pub fn init(
     // Both owned.
     const version_string: []const u8, const env_cache_dir: ?[]const u8 = switch (format) {
         .zon => zon: {
-            const parsed = try std.zon.parse.fromSliceAlloc(
-                Env,
-                alloc,
-                stdout,
-                null,
-                .{ .ignore_unknown_fields = true },
-            );
-            defer std.zon.parse.free(alloc, parsed);
+            var arena: std.heap.ArenaAllocator = .init(alloc);
+            defer arena.deinit();
+            var diagnostics: std.zon.parse.Diagnostics = undefined;
+            const parsed = try std.zon.parse.fromSlice(Env, .{
+                .gpa = alloc,
+                .arena = arena.allocator(),
+                .source = stdout,
+                .diagnostics = &diagnostics,
+                .ignore_unknown_fields = true,
+            });
             break :zon try dupeEnv(alloc, parsed);
         },
         .json => json: {

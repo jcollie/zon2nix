@@ -36,6 +36,7 @@ pub fn init(
     var self: BuildZigZon = .{
         .arena = std.heap.ArenaAllocator.init(allocator),
     };
+    errdefer self.arena.deinit();
 
     const content = content: {
         const content = try reader.allocRemaining(allocator, .unlimited);
@@ -62,35 +63,35 @@ pub fn init(
     defer zoir.deinit(allocator);
 
     if (zoir.hasCompileErrors()) {
-        if (path) |p| reportZoirErrors(zoir, ast, p);
+        if (path) |p| reportZoirErrors(&zoir, ast, p);
         return error.Parse;
     }
 
-    const root = std.zig.Zoir.Node.Index.root.get(zoir);
+    const root = std.zig.Zoir.Node.Index.root.get(&zoir);
     const root_struct = if (root == .struct_literal) root.struct_literal else return error.Parse;
 
     const alloc = self.arena.allocator();
 
     for (root_struct.names, 0..root_struct.vals.len) |name_node, index| {
         const value = root_struct.vals.at(@intCast(index));
-        const name = name_node.get(zoir);
+        const name = name_node.get(&zoir);
 
         if (std.mem.eql(u8, name, "name")) {
-            switch (value.get(zoir)) {
+            switch (value.get(&zoir)) {
                 .string_literal => |v| {
                     self.name = try alloc.dupe(u8, v);
                 },
                 .enum_literal => |v| {
-                    self.name = try alloc.dupe(u8, v.get(zoir));
+                    self.name = try alloc.dupe(u8, v.get(&zoir));
                 },
                 else => return error.Parse,
             }
         }
         if (std.mem.eql(u8, name, "version")) {
-            self.version = try alloc.dupe(u8, value.get(zoir).string_literal);
+            self.version = try alloc.dupe(u8, value.get(&zoir).string_literal);
         }
         if (std.mem.eql(u8, name, "fingerprint")) {
-            switch (value.get(zoir)) {
+            switch (value.get(&zoir)) {
                 .int_literal => |v| {
                     switch (v) {
                         .small => |i| self.fingerprint = @intCast(i),
@@ -101,10 +102,10 @@ pub fn init(
             }
         }
         if (std.mem.eql(u8, name, "paths")) {
-            switch (value.get(zoir)) {
+            switch (value.get(&zoir)) {
                 .array_literal => |elements| {
                     for (0..elements.len) |element_index| {
-                        switch (elements.at(@intCast(element_index)).get(zoir)) {
+                        switch (elements.at(@intCast(element_index)).get(&zoir)) {
                             .string_literal => |v| try self.paths.append(alloc, try alloc.dupe(u8, v)),
                             else => return error.Parse,
                         }
@@ -115,20 +116,12 @@ pub fn init(
             }
         }
         if (std.mem.eql(u8, name, "dependencies")) dep: {
-            switch (value.get(zoir)) {
+            switch (value.get(&zoir)) {
                 .struct_literal => |sl| {
                     for (sl.names, 0..sl.vals.len) |dep_name, dep_index| {
                         const node = sl.vals.at(@intCast(dep_index));
-                        const dep_body = try std.zon.parse.fromZoirNodeAlloc(
-                            BuildZigZon.Dependency,
-                            alloc,
-                            ast,
-                            zoir,
-                            node,
-                            null,
-                            .{},
-                        );
-                        try self.dependencies.put(alloc, try alloc.dupe(u8, dep_name.get(zoir)), dep_body);
+                        const dep_body = try parseDependency(alloc, &zoir, node);
+                        try self.dependencies.put(alloc, try alloc.dupe(u8, dep_name.get(&zoir)), dep_body);
                     }
                 },
                 .empty_literal => {
@@ -140,6 +133,47 @@ pub fn init(
     }
 
     return self;
+}
+
+/// Read one entry of `.dependencies`.
+///
+/// This is done by hand rather than with `std.zon.parse.fromZoir`, which in
+/// Zig 0.17.0 drops the `node` it is given and always parses from the root of
+/// the file -- so every dependency was read as if it were the whole manifest,
+/// and rejected for having a `.name`.
+fn parseDependency(alloc: std.mem.Allocator, zoir: *const std.zig.Zoir, node: std.zig.Zoir.Node.Index) !Dependency {
+    var dep: Dependency = .{};
+    const body = switch (node.get(zoir)) {
+        .struct_literal => |sl| sl,
+        .empty_literal => return dep,
+        else => return error.Parse,
+    };
+    for (body.names, 0..body.vals.len) |name_node, index| {
+        const name = name_node.get(zoir);
+        const value = body.vals.at(@intCast(index)).get(zoir);
+        if (std.mem.eql(u8, name, "lazy")) {
+            dep.lazy = switch (value) {
+                .true => true,
+                .false => false,
+                else => return error.Parse,
+            };
+            continue;
+        }
+        const field: *?[]const u8 = if (std.mem.eql(u8, name, "url"))
+            &dep.url
+        else if (std.mem.eql(u8, name, "hash"))
+            &dep.hash
+        else if (std.mem.eql(u8, name, "path"))
+            &dep.path
+        else
+            return error.Parse;
+        field.* = switch (value) {
+            .string_literal => |v| try alloc.dupe(u8, v),
+            .null => null,
+            else => return error.Parse,
+        };
+    }
+    return dep;
 }
 
 pub fn deinit(self: *BuildZigZon) void {
@@ -173,7 +207,7 @@ fn reportAstErrors(ast: std.zig.Ast, path: []const u8) void {
 
 /// Print the errors `ZonGen` collected -- a file that parses as Zig but is not
 /// valid ZON, such as one containing an expression.
-fn reportZoirErrors(zoir: std.zig.Zoir, ast: std.zig.Ast, path: []const u8) void {
+fn reportZoirErrors(zoir: *const std.zig.Zoir, ast: std.zig.Ast, path: []const u8) void {
     for (zoir.compile_errors) |err| {
         const msg = err.msg.get(zoir);
         if (err.token.unwrap()) |token| {

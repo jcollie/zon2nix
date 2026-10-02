@@ -8,8 +8,7 @@
 
   inputs = {
     nixpkgs.url = "https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz";
-    # nixpkgs has no Zig 0.17 yet, so the compiler comes from the overlay's
-    # nightlies until there is a release to move to.
+    # nixpkgs has no Zig 0.17 yet, so the compiler comes from the overlay.
     zig = {
       url = "git+https://git.jcollie.dev/jeff/zig-overlay.git";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -34,6 +33,10 @@
           inherit system;
         };
       forAllSystems = (function: nixpkgs.lib.genAttrs platforms (system: function (makePackages system)));
+      # The 0.17.0 release. The overlay lists it among the nightlies, under
+      # the date it was published, rather than as a `0.17.0` of its own, and
+      # `master` moves on to the 0.18 nightlies the next time it is updated.
+      zigFor = pkgs: zig.packages.${pkgs.stdenv.hostPlatform.system}."master-2026-10-01";
     in
     {
       devShells = forAllSystems (pkgs: {
@@ -42,7 +45,7 @@
             pkgs.nix-prefetch-git
             pkgs.nixfmt
             pkgs.reuse
-            zig.packages.${pkgs.stdenv.hostPlatform.system}.master
+            (zigFor pkgs)
           ]
           # valgrind does not build on Darwin, and this flake offers an
           # aarch64-darwin devshell.
@@ -53,7 +56,7 @@
       });
       packages = forAllSystems (pkgs: {
         zon2nix = pkgs.callPackage ./package.nix {
-          zig = zig.packages.${pkgs.stdenv.hostPlatform.system}.master;
+          zig = zigFor pkgs;
         };
       });
     };

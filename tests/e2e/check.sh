@@ -112,7 +112,8 @@ fi
 
 check --16 "$here/expected.nix"
 check --15 "$here/expected-0.15.nix"
-# nixpkgs has no Zig 0.17, so it comes from the overlay this flake builds with.
-check --17 "$here/expected-0.17.nix" "{ zig_0_17 = flake.inputs.zig.packages.\${system}.master; }"
+# nixpkgs has no Zig 0.17, so it comes from the overlay this flake builds with:
+# the 0.17.0 release, which the overlay files under the date it was published.
+check --17 "$here/expected-0.17.nix" "{ zig_0_17 = flake.inputs.zig.packages.\${system}.\"master-2026-10-01\"; }"
 
 exit "$failed"
