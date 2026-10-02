@@ -353,19 +353,18 @@ place of `zig_0_16`.
 
 The difference is that nixpkgs has no `zig_0_17` yet, so `callPackage` cannot
 supply the one the expression asks for, and the caller passes it in. From
-[zig-overlay](https://git.jcollie.dev/jeff/zig-overlay), which lists the 0.17.0
-release among its nightlies, under the date it was published, rather than as a
-`0.17.0` of its own — and whose `master` moves on to the 0.18 nightlies:
+[zig-overlay](https://git.jcollie.dev/jeff/zig-overlay), which packages each
+Zig release:
 
 ```nix
 let
   zigDeps = callPackage ./build.zig.zon.nix {
-    zig_0_17 = zig-overlay.packages.${stdenv.hostPlatform.system}."master-2026-10-01";
+    zig_0_17 = zig-overlay.packages.${stdenv.hostPlatform.system}."0.17.0";
   };
 in
 stdenv.mkDerivation (finalAttrs: {
   # ...
-  nativeBuildInputs = [ zig-overlay.packages.${stdenv.hostPlatform.system}."master-2026-10-01" ];
+  nativeBuildInputs = [ zig-overlay.packages.${stdenv.hostPlatform.system}."0.17.0" ];
 
   zigBuildFlags = [
     "--system"

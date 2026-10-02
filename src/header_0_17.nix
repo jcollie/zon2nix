@@ -6,8 +6,7 @@
   fetchzip,
   runCommandLocal,
   # nixpkgs has no Zig 0.17 yet, so until it does this has to be passed in:
-  # `zig_0_17 = zig-overlay.packages.${system}."master-2026-10-01"`, which is
-  # the 0.17.0 release, for instance.
+  # `zig_0_17 = zig-overlay.packages.${system}."0.17.0"`, for instance.
   zig_0_17,
   zstd,
   name ? "zig-packages",

@@ -33,10 +33,9 @@
           inherit system;
         };
       forAllSystems = (function: nixpkgs.lib.genAttrs platforms (system: function (makePackages system)));
-      # The 0.17.0 release. The overlay lists it among the nightlies, under
-      # the date it was published, rather than as a `0.17.0` of its own, and
-      # `master` moves on to the 0.18 nightlies the next time it is updated.
-      zigFor = pkgs: zig.packages.${pkgs.stdenv.hostPlatform.system}."master-2026-10-01";
+      # The 0.17.0 release, rather than `master`, which moves on to the 0.18
+      # nightlies.
+      zigFor = pkgs: zig.packages.${pkgs.stdenv.hostPlatform.system}."0.17.0";
     in
     {
       devShells = forAllSystems (pkgs: {
