@@ -27,11 +27,11 @@
         "zon2nix": "zon2nix"
       },
       "locked": {
-        "lastModified": 1790977620,
-        "narHash": "sha256-KIjNPrmY4M68v9N86VDsNY6UFiM+Mon4S+Cf1RHYiEg=",
+        "lastModified": 1790983248,
+        "narHash": "sha256-fjtjxWEofW5cbzXm3SqvjC2QZIbtp3lij2k8e1Jmj0w=",
         "ref": "refs/heads/main",
-        "rev": "464e4de22498681ae374949df04c7a6f5f001519",
-        "revCount": 1733,
+        "rev": "1a73bc5e8ae4d0223fefbd00afc58fe0b7f7e718",
+        "revCount": 1734,
         "type": "git",
         "url": "https://git.jcollie.dev/jeff/zig-overlay.git"
       },
