@@ -90,9 +90,11 @@ runCommandLocal name
     export -f unpack
 
     # Several at a time: `zig fetch` spends most of a package on one core.
+    # `-r` because otherwise xargs runs `unpack` once, with no arguments, when
+    # there are no packages at all, and the build fails.
     cores="''${NIX_BUILD_CORES:-0}"
     if [ "$cores" -le 0 ]; then cores="$(nproc)"; fi
-    xargs -P "$cores" -n 2 bash -c 'unpack "$@"' unpack <<'EOF'
+    xargs -r -P "$cores" -n 2 bash -c 'unpack "$@"' unpack <<'EOF'
     ${lib.concatStrings (lib.mapAttrsToList (hash: src: "${hash} ${src}\n") packages)}
     EOF
   ''
