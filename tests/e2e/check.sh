@@ -112,7 +112,6 @@ fi
 
 check --16 "$here/expected.nix"
 check --15 "$here/expected-0.15.nix"
-# nixpkgs has no Zig 0.17, so it comes from the overlay this flake builds with.
-check --17 "$here/expected-0.17.nix" "{ zig_0_17 = flake.inputs.zig.packages.\${system}.\"0.17.0\"; }"
+check --17 "$here/expected-0.17.nix"
 
 exit "$failed"

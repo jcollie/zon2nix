@@ -93,8 +93,7 @@ it must reference the matching Zig package:
 
 - `--15` — generated expression uses `zig_0_15`
 - `--16` — generated expression uses `zig_0_16` (default)
-- `--17` — generated expression uses `zig_0_17`, which nixpkgs does not have
-  yet, so the caller has to pass one in — see below
+- `--17` — generated expression uses `zig_0_17`
 
 It also decides where the generated packages have to be put at build time,
 which the versions do differently — see below.
@@ -351,29 +350,6 @@ section above applies — `--system`, `-fno-sys`, the forking of packages with
 `.path` dependencies, and the `zig-pkg` alternative — with `zig_0_17` in
 place of `zig_0_16`.
 
-The difference is that nixpkgs has no `zig_0_17` yet, so `callPackage` cannot
-supply the one the expression asks for, and the caller passes it in. From
-[zig-overlay](https://git.jcollie.dev/jeff/zig-overlay), which packages each
-Zig release:
-
-```nix
-let
-  zigDeps = callPackage ./build.zig.zon.nix {
-    zig_0_17 = zig-overlay.packages.${stdenv.hostPlatform.system}."0.17.0";
-  };
-in
-stdenv.mkDerivation (finalAttrs: {
-  # ...
-  nativeBuildInputs = [ zig-overlay.packages.${stdenv.hostPlatform.system}."0.17.0" ];
-
-  zigBuildFlags = [
-    "--system"
-    "${zigDeps}"
-  ];
-  zigCheckFlags = finalAttrs.zigBuildFlags;
-})
-```
-
 Zig 0.17 runs `zig fetch` in a build runner it compiles the first time it is
 asked, which takes a minute or more of one core, so building the expression
 costs that much more than it does for 0.16. It is paid once per build of the
@@ -431,8 +407,7 @@ The repository is additionally mirrored at
 ## Development
 
 A development shell with Zig, `nix-prefetch-git`, `nixfmt`, and `valgrind` is
-provided. Its Zig is the 0.17.0 release from
-[zig-overlay](https://git.jcollie.dev/jeff/zig-overlay), and the package is
+provided. Its Zig is `zig_0_17` from nixpkgs-unstable, and the package is
 built with the same one:
 
 ```bash
