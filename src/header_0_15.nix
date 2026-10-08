@@ -4,7 +4,7 @@
   fetchgit,
   fetchurl,
   fetchzip,
-  runCommandLocal,
+  runCommand,
   zig_0_15,
   zstd,
   name ? "zig-packages",
@@ -60,7 +60,13 @@ in
 # what the directory walk calls a file, so symlinked headers are skipped
 # without a word. Building them all in one derivation gives real files from
 # the start, without a second copy of everything.
-runCommandLocal name
+#
+# `runCommand` and not `runCommandLocal`: the result is worth taking from a
+# binary cache. Building it locally means first fetching a whole Zig, and
+# under 0.17 compiling its fetch build runner too, which is minutes on a small
+# CI machine; `runCommandLocal` forbids substituting it, so every job that
+# wants the packages builds them again even when a cache already holds them.
+runCommand name
   {
     nativeBuildInputs = [ zig_0_15 ];
     passthru = { inherit pathDependencyPackages; };
