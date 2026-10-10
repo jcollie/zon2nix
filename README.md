@@ -417,8 +417,9 @@ rad auth
 
 Cloning also seeds the repository, helping keep it available on the network.
 The repository is additionally mirrored at
-[github.com/jcollie/zon2nix](https://github.com/jcollie/zon2nix) and
-[codeberg.org/jcollie/zon2nix](https://codeberg.org/jcollie/zon2nix).
+[github.com/jcollie/zon2nix](https://github.com/jcollie/zon2nix),
+[codeberg.org/jcollie/zon2nix](https://codeberg.org/jcollie/zon2nix) and
+<https://tangled.org/jcollie.dev/zon2nix>.
 
 ## Development
 
