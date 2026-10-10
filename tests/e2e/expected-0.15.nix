@@ -94,8 +94,9 @@ let
   };
 
   # The packages whose own manifest declares a dependency by `.path`, which
-  # Zig 0.16.0 cannot build through `zig build --system`. Listed here too so
-  # that the two versions' expressions offer the same things; see the README.
+  # neither Zig 0.16.0 nor 0.17.0 can build through `zig build --system`.
+  # Listed here too so that every version's expression offers the same things;
+  # see the README.
   pathDependencyPackages = [
   ];
 in

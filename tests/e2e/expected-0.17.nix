@@ -93,9 +93,13 @@ let
     };
   };
 
-  # The packages whose own manifest declares a dependency by `.path`, which
-  # Zig 0.16.0 cannot build through `zig build --system`. Listed here too so
-  # that every version's expression offers the same things; see the README.
+  # The packages whose own manifest declares a dependency by `.path`. Zig
+  # 0.17.0 cannot build these through `zig build --system`: it roots the system
+  # package directory at its absolute store path, so a `.path` dependency
+  # inside one of these resolves to an absolute path, which it refuses with
+  # "expected path relative to build root; found absolute path". A package
+  # that wants `--system` copies each of these into its build root and passes
+  # `--fork=` with a relative path; see the README.
   pathDependencyPackages = [
   ];
 in

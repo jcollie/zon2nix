@@ -63,9 +63,10 @@ manifest_queued: bool,
 /// and reported once the round it belongs to has finished.
 fetch_error: ?anyerror,
 /// Whether this package's own `build.zig.zon`, or that of a package it
-/// reaches by `.path`, declares a dependency by `.path`. Zig 0.16.0 cannot
-/// build such a package through `zig build --system`, so the generated Nix
-/// expression names them and a package that uses `--system` forks them.
+/// reaches by `.path`, declares a dependency by `.path`. Neither Zig 0.16.0
+/// nor 0.17.0 can build such a package through `zig build --system`, so the
+/// generated Nix expression names them and a package that uses `--system`
+/// forks them.
 has_path_dependency: bool,
 
 const Hasher = std.crypto.hash.sha2.Sha256;

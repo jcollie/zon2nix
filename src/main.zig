@@ -39,7 +39,7 @@ const usage =
     \\Zig version of the Nix expression:
     \\  --16             use zig_0_16 (the default)
     \\  --15             use zig_0_15
-    \\  --17             use zig_0_17, which the caller has to pass in
+    \\  --17             use zig_0_17
     \\
     \\Fetching:
     \\  --jobs=N         fetch N packages at once (default 8)
@@ -601,10 +601,10 @@ pub fn main(init: std.process.Init) !u8 {
                 }
 
                 if (zon_dep.path) |dep_path| {
-                    // Zig 0.16.0 hangs in `--system` mode on a fetched package
-                    // with a `.path` dependency, so the package that brought
-                    // this manifest in has to be named in the generated
-                    // expression.
+                    // Zig 0.16.0 hangs and 0.17.0 fails in `--system` mode on
+                    // a fetched package with a `.path` dependency, so the
+                    // package that brought this manifest in has to be named
+                    // in the generated expression.
                     if (manifest.owner) |owner| owner.has_path_dependency = true;
 
                     const dir = try cwd.openDir(
@@ -748,8 +748,8 @@ pub fn main(init: std.process.Init) !u8 {
         for (list.items) |dep| try writeNixPackage(alloc, w, dep);
         try w.writeAll(middle);
         // Packages that declare `.path` dependencies of their own, which
-        // `zig build --system` cannot build on Zig 0.16.0 without forking
-        // them.
+        // `zig build --system` cannot build on Zig 0.16.0 or 0.17.0 without
+        // forking them.
         for (list.items) |dep| {
             if (!dep.has_path_dependency) continue;
             try writeNixString(w, dep.zig_hash);
