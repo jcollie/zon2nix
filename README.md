@@ -358,6 +358,26 @@ that is itself a symlink into the store resolves `../../.zig-cache` to
 somewhere near the root of the filesystem, and the build fails to spawn a
 generator it has just finished building.
 
+The symlinks have one cost: a package whose `build.zig` installs headers with
+`installHeadersDirectory` installs none from them, because the directory is
+walked for regular files and a symlink is not one. ghostty's vendored simdutf
+does exactly this, and a fork made with `cp -rsL` then fails to compile
+ghostty-vt with `'simdutf.h' file not found`, though `libsimdutf.a` was built
+without complaint. Copy such a package for real instead. The fork is the only
+place this matters, and copying it costs only the size of the one package:
+
+```nix
+  postPatch = lib.concatMapStrings (p: ''
+    cp -rL --no-preserve=mode ${zigDeps}/${p} fork-${p}
+  '') zigDeps.pathDependencyPackages;
+```
+
+A ghostty fork built with `--system` also needs ghostty's system integrations
+turned back off. `--system` turns on every one a dependency offers, so
+ghostty-vt looks for the system's simdutf and highway rather than building its
+own. Pass `-fno-sys=simdutf` and `-fno-sys=highway` at least. harrier passes
+every one `zig build --help` lists for ghostty.
+
 ### Zig 0.17
 
 Zig 0.17 takes the packages exactly as 0.16 does, so everything in the
