@@ -275,16 +275,31 @@ the cache root in this mode, and the later pass that wires up each package's
 The second lookup therefore misses, and the release compiler has no safety
 check there to say so.
 
-This appears to be fixed in Zig after 0.16.0: the restructuring that moved
-`zig build` out of the compiler and into `lib/compiler/Maker.zig` gave the
-system package directory a field of its own instead of aliasing it onto the
-global cache, so both passes now hash against the same directory. It has not
-yet been re-tested against the 0.17.0 release — if it is fixed there, the
-forking below is dead weight for anyone building with it.
+Zig 0.17.0 no longer hangs, but it still cannot build such a package through
+`--system`; it stops at once instead, pointing at the `.path` line in the
+fetched package's manifest:
 
-Forking the offending package past the farm gets `--system` working again,
-because a forked package is rooted outside the farm and both hashes then agree.
-The fork has to live inside the build root, and be given as a relative path.
+```
+error: expected path relative to build root; found absolute path
+            .path = "vendor/zig-yaml",
+                    ^~~~~~~~~~~~~~~~~
+```
+
+The restructuring that moved `zig build` out of the compiler and into
+`lib/compiler/Maker.zig` gave the system package directory a field of its own,
+which did away with the hash disagreement, but it builds that directory with
+`Path.initCwd`: the cwd as the root, and the whole of the absolute store path
+as the sub-path beneath it. A `.path` dependency inside a package resolves
+against that sub-path, so it comes out absolute too, and `Fetch.run` refuses
+any `.path` dependency that is absolute — a check meant for a manifest that
+names one, not for this. Handing `--system` a path relative to the build root
+does get past it on 0.17.0, but only there; the fork below works on both.
+
+Forking the offending package past the farm gets `--system` working again on
+either version. On 0.16.0 a forked package is rooted outside the farm, so both
+hashes agree; on 0.17.0 it is rooted at the relative path it was given, so its
+`.path` dependencies resolve to relative paths. Either way the fork has to live
+inside the build root, and be given as a relative path.
 
 `zon2nix` reads every fetched manifest, so it knows which packages these are and
 names them: the generated expression carries the list as
@@ -322,8 +337,8 @@ here the contents come from the same store path either way.
 #### Or give up `--system`
 
 The other way is to put the packages where Zig looks for them itself and not
-pass the flag at all. Zig 0.16 unpacks into a `zig-pkg` directory beside the
-sources, so:
+pass the flag at all. Zig 0.16 and 0.17 unpack into a `zig-pkg` directory
+beside the sources, so:
 
 ```nix
   postPatch = ''
@@ -348,7 +363,8 @@ generator it has just finished building.
 Zig 0.17 takes the packages exactly as 0.16 does, so everything in the
 section above applies — `--system`, `-fno-sys`, the forking of packages with
 `.path` dependencies, and the `zig-pkg` alternative — with `zig_0_17` in
-place of `zig_0_16`.
+place of `zig_0_16`. The forking is still needed: 0.17.0 fails on a package
+with `.path` dependencies where 0.16.0 hung on it, as described above.
 
 Zig 0.17 runs `zig fetch` in a build runner it compiles the first time it is
 asked, which takes a minute or more of one core, so building the expression
