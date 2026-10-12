@@ -169,6 +169,24 @@ silent.
 - `--verbose` — increase verbosity (may be repeated)
 - `--debug` — maximum verbosity
 
+### Terminal status
+
+When stderr is a terminal, zon2nix reports what it is doing with the Program
+Status Protocol, OSC 7501, which a terminal that supports it can show in a
+tab, a progress bar or a notification. A terminal that does not support it
+ignores the sequence. Nothing is sent when stderr is a file or a pipe.
+
+- `--no-status` — send no status reports
+
+While packages are fetched the report is `working`, with the share of the
+packages found so far that have been fetched; this can fall back as fetched
+packages turn up dependencies of their own, since how many there are is not
+known until the end. The run ends with `done`, saying how many packages were
+found, or `error`, naming the fetch that failed if one did. Both of those
+outlast the process, so a long run in another tab can be found finished
+afterwards. Every report carries `app=zon2nix`, and as its title the name of
+the directory holding the first manifest named.
+
 ## Using the generated Nix expression
 
 The file written by `--nix` is a function suitable for `callPackage`. It
@@ -500,6 +518,10 @@ Linux, which is all the Forgejo runners are.
   <https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/std/zon/parse.zig> —
   `fromZoir`, whose `node` option is never passed on, so it always parses from
   the root; which is why zon2nix reads each dependency's fields itself.
+
+- Superlogical. *Program Status Protocol* (OSC 7501). Rex documentation.
+  <https://www.superlogical.com/rex/docs/build/program-status> — the wire
+  format, keys, states and limits of the terminal status reports.
 
 ## License
 

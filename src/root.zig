@@ -7,6 +7,7 @@ const std = @import("std");
 pub const BuildZigZon = @import("BuildZigZon.zig");
 pub const Dep = @import("Dep.zig");
 pub const Deps = @import("Deps.zig");
+pub const ProgramStatus = @import("ProgramStatus.zig");
 pub const ZigPackage = @import("ZigPackage.zig");
 pub const nix = @import("nix.zig");
 

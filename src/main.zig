@@ -7,6 +7,7 @@ const builtin = @import("builtin");
 const options = @import("options");
 
 const zon2nix = @import("zon2nix");
+const ProgramStatus = zon2nix.ProgramStatus;
 
 pub const ZigVersion = enum {
     @"15",
@@ -50,6 +51,7 @@ const usage =
     \\  --quiet          say less (repeatable)
     \\  --verbose        say more (repeatable)
     \\  --debug          say everything
+    \\  --no-status      send the terminal no OSC 7501 status reports
     \\
     \\  -h, --help       show this and exit
     \\
@@ -111,6 +113,11 @@ const Fetcher = struct {
     group: std.Io.Group,
     /// How many workers were started, which may be fewer than asked for.
     workers: usize,
+    /// How many fetches have been asked for, and how many have come back,
+    /// for the progress reported to the terminal. A package fetched again
+    /// counts twice in both.
+    submitted: usize,
+    returned: usize,
 
     fn init(self: *Fetcher, jobs: usize) !void {
         self.todo_buffer = try self.alloc.alloc(*zon2nix.Dep, jobs);
@@ -126,6 +133,8 @@ const Fetcher = struct {
         self.outstanding = 0;
         self.finished = null;
         self.group = .init;
+        self.submitted = 0;
+        self.returned = 0;
 
         self.workers = 0;
         while (self.workers < jobs) : (self.workers += 1) {
@@ -137,6 +146,13 @@ const Fetcher = struct {
         // An Io that will not spawn anything is not an error: the main
         // thread does it all itself, one package at a time.
         if (self.workers == 0) self.finished = .empty;
+    }
+
+    /// How far through the packages found so far. It can fall back as more
+    /// are found, since nothing says how many there are until the end.
+    fn progress(self: *const Fetcher) u8 {
+        if (self.submitted == 0) return 0;
+        return @intCast(self.returned * 100 / self.submitted);
     }
 
     fn deinit(self: *Fetcher) void {
@@ -194,6 +210,7 @@ const Fetcher = struct {
         std.debug.assert(!dep.in_flight);
         dep.in_flight = true;
         try self.backlog.append(self.alloc, dep);
+        self.submitted += 1;
     }
 
     /// Settles the URLs of everything in the backlog, just before it is
@@ -230,6 +247,7 @@ const Fetcher = struct {
             self.backlog.clearRetainingCapacity();
             const dep = finished.pop() orelse return null;
             dep.in_flight = false;
+            self.returned += 1;
             return dep;
         }
 
@@ -252,6 +270,7 @@ const Fetcher = struct {
         const dep = try self.done.getOne(self.io);
         self.outstanding -= 1;
         dep.in_flight = false;
+        self.returned += 1;
         return dep;
     }
 };
@@ -370,6 +389,8 @@ pub fn main(init: std.process.Init) !u8 {
 
     var jobs: usize = default_jobs;
 
+    var want_status = true;
+
     var excludes: Excludes = .{};
     defer excludes.deinit(alloc);
 
@@ -401,6 +422,11 @@ pub fn main(init: std.process.Init) !u8 {
 
             if (std.mem.eql(u8, arg, "--debug")) {
                 verbose = 4;
+                continue;
+            }
+
+            if (std.mem.eql(u8, arg, "--no-status")) {
+                want_status = false;
                 continue;
             }
 
@@ -497,6 +523,19 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
+    // Every way out from here on that is not a success leaves the terminal
+    // a failure to find, rather than a fetch that looks as if it is still
+    // going; the ones that know what went wrong say so first.
+    var status: zon2nix.ProgramStatus = .init(io, want_status);
+    // Named after the directory of the first manifest, which is usually the
+    // project's. A copy, because the manifest's path is freed once it is read.
+    const status_title = try alloc.dupe(u8, std.fs.path.basename(std.fs.path.dirname(paths.items[0].path) orelse "/"));
+    defer alloc.free(status_title);
+    status.title = status_title;
+    var status_sent = false;
+    defer if (!status_sent) status.send(.{ .state = .@"error", .msg = "stopped on an error" });
+    status.send(.{ .state = .working, .msg = "reading manifests" });
+
     var deps: zon2nix.Deps = undefined;
     try deps.init(io, alloc, init.environ_map);
     defer deps.deinit(io, alloc);
@@ -532,6 +571,8 @@ pub fn main(init: std.process.Init) !u8 {
         .finished = undefined,
         .group = undefined,
         .workers = undefined,
+        .submitted = undefined,
+        .returned = undefined,
     };
     try fetcher.init(jobs);
     defer fetcher.deinit();
@@ -636,8 +677,24 @@ pub fn main(init: std.process.Init) !u8 {
         const dep = try fetcher.next() orelse break;
         if (dep.fetch_error) |err| {
             log.err("fetching {s}: {t}", .{ dep.fetched_url.?, err });
+            if (!failed) {
+                var buf: [ProgramStatus.max_msg_bytes]u8 = undefined;
+                status.send(.{
+                    .state = .@"error",
+                    .msg = std.fmt.bufPrint(&buf, "fetching {s}: {t}", .{ dep.fetched_url.?, err }) catch "fetching failed",
+                });
+                status_sent = true;
+            }
             failed = true;
             continue;
+        }
+        if (!failed) {
+            var buf: [64]u8 = undefined;
+            status.send(.{
+                .state = .working,
+                .progress = fetcher.progress(),
+                .msg = std.fmt.bufPrint(&buf, "fetched {d} of {d} packages", .{ fetcher.returned, fetcher.submitted }) catch null,
+            });
         }
         if (failed) continue;
         // A better URL may have turned up while it was being fetched.
@@ -667,6 +724,8 @@ pub fn main(init: std.process.Init) !u8 {
         var it = deps.iterator();
         while (it.next()) |dep| std.debug.assert(std.mem.eql(u8, dep.getUrl(), dep.fetched_url.?));
     }
+
+    status.send(.{ .state = .working, .msg = "writing output" });
 
     var list: std.ArrayList(*zon2nix.Dep) = .empty;
     // don't deallocate the actual entries as they will be
@@ -861,6 +920,15 @@ pub fn main(init: std.process.Init) !u8 {
 
         try writer.interface.writeAll("]\n");
         try writer.interface.flush();
+    }
+
+    {
+        var buf: [64]u8 = undefined;
+        status.send(.{
+            .state = .done,
+            .msg = std.fmt.bufPrint(&buf, "found {d} packages", .{list.items.len}) catch null,
+        });
+        status_sent = true;
     }
 
     return 0;
